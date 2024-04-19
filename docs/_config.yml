@@ -1,0 +1,11 @@
+title: zvold's blog
+url: "https://zvold.github.io"
+baseurl: "/"
+
+theme: jekyll-theme-primer
+
+plugins:
+  - jekyll-sitemap
+  - jekyll-octicons
+
+markdown: GFM

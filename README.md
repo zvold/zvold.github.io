@@ -1,12 +1,11 @@
-# The title
+# GitHub Pages site at https://zvold.github.io
 
-> [!NOTE]
-> Does 'note' rendering work?
+- [`docs/`](docs/): web pages published to the URL above.
+- [`src/`](src/): source code for various programs described on the site.
 
-```go
-// what about Go code?
-type A struct {
-  a, b int
-  c    string
-}
-```
+## License
+
+The documentation ([`docs/`](docs) folder) is licensed under a [CC-BY license](LICENSE.cc-by).
+
+All code in this repository ([`src/`](src) folder) is licensed under the [MIT license](LICENSE.mit).
+
