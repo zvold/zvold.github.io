@@ -631,6 +631,8 @@ And, here's a 16×8 torus:
 
 For the orthogonal grid, De Bruijn toruses can be assembled directly (see \[1\] and \[2\]). For the hexagonal grid, I don't know if there's a construction method better than backtracking.
 
+Update (2024-05-08): [Twisted Hexagonal De Bruijn Torus](../2024-05-08/twisted-hexagonal-de-bruijn-torus.md).
+
 ---
 \[1\] Cock, J.C., 1988. Toroidal tilings from de Bruijn-Good cyclic sequences. _Discrete mathematics_, _70_(2), pp.209-210. ([link](https://doi.org/10.1016/0012-365X(88)90095-7)) \
 \[2\] Iványi, A., 1988. Construction of infinite de Bruijn arrays. _Discrete applied mathematics_, _22_(3), pp.289-293. ([link](https://doi.org/10.1016/0166-218X(88)90101-1))
