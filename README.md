@@ -1,4 +1,4 @@
-# GitHub Pages site at https://zvold.github.io
+# GitHub Pages site at [zvold.github.io](https://zvold.github.io)
 
 - [`docs/`](docs/): web pages published to the URL above.
 - [`src/`](src/): source code for various programs described on the site.
