@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG experiments</title>
+    <style>
+      .grid-container {
+        display: grid;
+        grid-template-columns: 1fr;
+        width: fit-content;
+      }
+
+      .content-div {
+        width: 100%;
+      }
+
+      .button-container {
+        display: flex;
+      }
+
+      .button-container button {
+        margin: 10px 10px 10px 0px;
+      }
+
+      .button {
+        box-shadow: inset -1px -1px #0a0a0a,
+                    inset  1px  1px #ffffff,
+                    inset -2px -2px grey,
+                    inset  2px  2px #dfdfdf;
+        background-color: #ddd;
+        border: 1px solid #aaa;
+      }
+
+      .button.pressed {
+        box-shadow: inset -1px -1px #ffffff,
+                    inset  1px  1px #0a0a0a,
+                    inset -2px -2px #dfdfdf,
+                    inset  2px  2px #808080;
+        background-color: #ddd;
+        border: 1px solid #aaa;
+      }
+
+      * {
+        font-family: serif;
+        font-size: 1rem;
+      }
+
+      body {
+        background-color: #aaa;
+      }
+
+      html {
+        font-size: 100%;
+      }
+    </style>
+    <script>
+      // Main data structure representing the full state of the counter.
+      // Note that to get the full "work" or "rest" time, the time of the last
+      // mode change has to be taken into account.
+      var state = {
+        "mode": {{.Mode}}, // Mode: one of [ "work", "rest", "off" ].
+        "work": {{.Work}}, // Work time in seconds.
+        "rest": {{.Rest}}, // Rest time in seconds.
+        "modeStart": {{.ModeStart}}, // Time when mode last changed in millis.
+      }
+      var timer = null;
+
+      // Parse the target percentage from an optional URL parameter 't'.
+      const urlParams = new URLSearchParams(window.location.search);
+      var target = 75;
+      if (urlParams.get('t') != null) {
+        const parsedInt = parseInt(urlParams.get('t'))
+        if (!isNaN(parsedInt) && parsedInt > 0 && parsedInt <= 100) {
+          target = parsedInt
+        }
+      }
+
+      // Render ready-to-use div element representing the current state.
+      // This includes progress bar, correctly pressed buttons, text, etc.
+      function renderTemplate() {
+        const durations = totalTime();
+        const str = template
+          .replaceAll("%SPLIT_POSITION%", 400.0 * ratio(durations))
+          .replaceAll("%REST_WIDTH%", 400.0 * (1.0 - ratio(durations)))
+          .replaceAll("%WORK_TIME%", formatTime(durations.totalWork))
+          .replaceAll("%REST_TIME%", formatTime(durations.totalRest))
+          .replaceAll("%TARGET_X%", 400.0 * target / 100.0)
+          .replaceAll("%" + state.mode + "%", "pressed")
+          .replace(/%(work|rest|off)%/g, "");
+
+        return new DOMParser()
+          .parseFromString(str, "text/html")
+          .body
+          .firstChild;
+      }
+
+      // Sets or removes the "fast update" timer, depending on the mode.
+      function setOrClearTimer() {
+        const durations = totalTime();
+        switch(state.mode) {
+          case "work":
+            if (timer == null) {
+              // Redraw only as frequently as the text changes.
+              const delay = durations.totalWork < 3600 ? 1111 : 61111;
+              timer = setInterval(redrawView, delay);
+            }
+            break;
+          case "rest":
+            if (timer == null) {
+              // Redraw only as frequently as the text changes.
+              const delay = durations.totalRest < 3600 ? 1111 : 61111;
+              timer = setInterval(redrawView, delay);
+            }
+            break;
+          case "off":
+            if (timer != null) {
+              // No need to redraw in the "off" mode as nothing changes.
+              clearInterval(timer);
+              timer = null;
+            }
+            break;
+        }
+      }
+
+      // Changes (potentially) the current mode, first locally, then by
+      // requesting the mode change server-side. The server is the source of
+      // truth, so the final mode is decided based on server's response.
+      function changeMode(newMode) {
+        if (state.mode == newMode) {
+          return;
+        }
+        switch(newMode) {
+          case "work":
+            setPressed("work", true);
+            setPressed("rest", false);
+            setPressed("off", false);
+            break;
+          case "rest":
+            setPressed("work", false);
+            setPressed("rest", true);
+            setPressed("off", false);
+            break;
+          case "off":
+            setPressed("work", false);
+            setPressed("rest", false);
+            setPressed("off", true);
+            break;
+        }
+        const durations = totalTime();
+        state.work = durations.totalWork;
+        state.rest = durations.totalRest;
+
+        state.mode = newMode;
+        state.modeStart = Date.now();
+
+        setOrClearTimer();
+        console.log("mode switched to: ", state.mode)
+
+        updateServerMode(newMode);
+      }
+
+      // Convenience function to re-draw the specified button as pressed or not.
+      // This doesn't mutate the actual state in any way.
+      function setPressed(buttonId, isPressed) {
+        document
+            .getElementById("button-" + buttonId)
+            .setAttribute("class", isPressed ? "button pressed" : "button");
+      }
+
+      // Calculates the total work/rest time in seconds and returns it as a map
+      // with keys 'totalRest' and 'totalWork'.
+      function totalTime() {
+        const addTime = (Date.now() - state.modeStart) / 1000;
+        switch (state.mode) {
+          case "work":
+            return {"totalWork": state.work + addTime, "totalRest": state.rest};
+          case "rest":
+            return {"totalWork": state.work, "totalRest": state.rest + addTime};
+        }
+        return {"totalWork": state.work, "totalRest": state.rest};
+      }
+
+      // Convenience function for calculating the position of the progress bar.
+      function ratio(durations) {
+        if (durations.totalRest != 0) {
+          return 1.0 * durations.totalWork
+                     / (durations.totalWork + durations.totalRest);
+        }
+        return 1.0;
+      }
+
+      // Completely re-draws the view (progress bar, text and buttons).
+      function redrawView() {
+        const progressDiv = renderTemplate();
+        const parent = document.getElementById("progress-div")
+        const oldChild = parent.firstElementChild;
+
+        parent.replaceChild(progressDiv, oldChild);
+      }
+
+      // Formats time in seconds into a reasonable human-readable string.
+      // TODO: is there no normal string formatting in JS?
+      function formatTime(seconds) {
+        seconds = Math.round(seconds);
+        if (seconds < 60) {
+          return `${seconds}s`;
+        } else if (seconds < 3600) {
+          const minutes = Math.floor(seconds / 60);
+          const remainingSeconds = seconds % 60;
+          return `${minutes}m${remainingSeconds.toString().padStart(2, "0")}s`;
+        } else {
+          const hours = Math.floor(seconds / 3600);
+          const remainingMinutes = Math.floor((seconds % 3600) / 60);
+          return `${hours}h${remainingMinutes.toString().padStart(2, "0")}m`;
+        }
+      }
+
+      // Sends an HTTP POST request with (optionally) the new mode and receives
+      // back the up-to-date state (work/rest times and the current mode).
+      function updateServerMode(newMode) {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', "http://localhost:37177");
+        xhr.setRequestHeader("Content-Type", "application/json");
+
+        var dataToSend = {};
+        if (newMode != null) {
+          dataToSend = { mode: newMode, };
+        }
+
+        xhr.onload = function() {
+          if (xhr.status === 200) {
+            const responseJson = JSON.parse(xhr.responseText);
+            if (responseJson.mode != state.mode) {
+              console.log("server mode correction: ", responseJson)
+            }
+            state = responseJson
+            redrawView();
+            setOrClearTimer();
+          } else {
+            console.error("Error fetching data:", xhr.statusText);
+          }
+        };
+
+        xhr.send(JSON.stringify(dataToSend));
+      }
+
+      // Template for drawing the div with full info, including "progress bar",
+      // buttons in correct states, and text.
+      const template = `
+        <div class="grid-container">
+          <svg width="401" height="40" stroke-width="2" stroke="black">
+            <rect x="0" y="10" width="%SPLIT_POSITION%" height="20" fill="#0072d4"/>
+            <rect x="%SPLIT_POSITION%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
+            <rect x="1" y="10" width="400" height="20" fill="transparent"/>
+            <polygon points="%TARGET_X%, 1, %TARGET_X%, 41" stroke="#ca4898" stroke-dasharray="1, 5"/>
+          </svg>
+          <div class="content-div" style="grid-row: 2; display: flex; justify-content: space-between;">
+            <span style="text-align: left;">work→ %WORK_TIME%</span>
+            <span style="text-align: right;">%REST_TIME% ←rest</span>
+          </div>
+          <div class="content-div button-container" style="grid-row: 3;">
+            <button id="button-work" class="button %work%" onclick="changeMode('work')">
+              work
+            </button>
+            <button id="button-rest" class="button %rest%" onclick="changeMode('rest')">
+              rest
+            </button>
+            <button id="button-off" class="button %off%" onclick="changeMode('off')">
+              off the clock
+            </button>
+          </div>
+        </div>
+        `
+
+      window.onload = function() {
+        redrawView();
+        setOrClearTimer();
+
+        // Add a "slow" timer for periodic server state synchronization.
+        // TODO: use web sockets (?) for immediate server->client updates.
+        setInterval(function() {updateServerMode(null);}, 15000);
+      };
+    </script>
+  </head>
+  <body>
+    <div id="progress-div" style="position: absolute; left: 10px; top: 10px;">
+      <div></div>
+    </div>
+  </body>
+</html>
