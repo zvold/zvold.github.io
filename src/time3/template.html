@@ -64,6 +64,7 @@
         "rest": {{.Rest}}, // Rest time in seconds.
         "modeStart": {{.ModeStart}}, // Time when mode last changed in millis.
       }
+      var address = {{.Address}};
       var timer = null;
 
       // Parse the target percentage from an optional URL parameter 't'.
@@ -220,7 +221,7 @@
       // back the up-to-date state (work/rest times and the current mode).
       function updateServerMode(newMode) {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', "http://localhost:37177");
+        xhr.open("POST", address + ":37177");
         xhr.setRequestHeader("Content-Type", "application/json");
 
         var dataToSend = {};

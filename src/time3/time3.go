@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
-	"log"
+	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
 
 //go:embed template.html
 var f embed.FS
+
+// IPv4 address on which the server should be reachable.
+var serverAddress net.IP
 
 // ModeType is an enum representing the possible "modes": work, rest and off.
 type ModeType int
@@ -77,12 +81,14 @@ func (state *State) writeHtmlResponse(
 		Work      int64 // JS code expects this in seconds.
 		Rest      int64 // Same.
 		Mode      string
-		ModeStart int64 // JS code expects this in milliseconds.
+		ModeStart int64  // JS code expects this in milliseconds.
+		Address   string // IPv4 address of the server.
 	}{
 		Work:      state.work,
 		Rest:      state.rest,
 		Mode:      state.mode.toString(),
 		ModeStart: state.modeStart.UnixMilli(),
+		Address:   serverAddress.String(),
 	}
 
 	return tmpl.Execute(w, data)
@@ -126,12 +132,36 @@ func (state *State) changeMode(newMode ModeType) {
 	state.mode = newMode
 }
 
+// Finds IPv4 non-loopback address among available interfaces, or fails.
+func findNonLoopbackAddress() net.IP {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		fmt.Printf("Cannot list network interfaces: %v", err)
+		os.Exit(1)
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ip4 := ipnet.IP.To4(); ip4 != nil {
+				return ip4
+			}
+		}
+	}
+
+	fmt.Printf("Cannot find non-loopback IPv4 address.")
+	os.Exit(1)
+
+	panic("Unreachable")
+}
+
 // Starts an HTTP server which:
 //   - Responds with a full HTML page to HTTP GET requests. The page will
 //     represent the current State.
 //   - Accepts requests for mode changes via HTTP POST and responds with a JSON
 //     encoded current State.
 func main() {
+	serverAddress = findNonLoopbackAddress()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			// Request fetching the full HTML page for the current state.
@@ -177,7 +207,7 @@ func main() {
 
 			newMode := modeFromString(request.Mode)
 			if newMode == nil {
-				log.Printf("Unknown mode specified: %v", request.Mode)
+				fmt.Printf("Unknown mode specified: %v\n", request.Mode)
 				return
 			}
 
@@ -187,6 +217,6 @@ func main() {
 		}
 	})
 
-	fmt.Println("Server listening on port 37177...")
+	fmt.Printf("Server listening on %s:37177...\n", serverAddress.String())
 	http.ListenAndServe(":37177", nil)
 }
