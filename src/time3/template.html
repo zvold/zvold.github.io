@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SVG experiments</title>
+    <title>Punch Clock 3000</title>
     <style>
       .grid-container {
         display: grid;
@@ -82,6 +82,7 @@
       function renderTemplate() {
         const durations = totalTime();
         const str = template
+          .replaceAll("%CURRENT_DATE%", formatCurrentDate())
           .replaceAll("%SPLIT_POSITION%", 400.0 * ratio(durations))
           .replaceAll("%REST_WIDTH%", 400.0 * (1.0 - ratio(durations)))
           .replaceAll("%WORK_TIME%", formatTime(durations.totalWork))
@@ -103,14 +104,14 @@
           case "work":
             if (timer == null) {
               // Redraw only as frequently as the text changes.
-              const delay = durations.totalWork < 3600 ? 1111 : 61111;
+              const delay = durations.totalWork < 3600 ? 1001 : 61000;
               timer = setInterval(redrawView, delay);
             }
             break;
           case "rest":
             if (timer == null) {
               // Redraw only as frequently as the text changes.
-              const delay = durations.totalRest < 3600 ? 1111 : 61111;
+              const delay = durations.totalRest < 3600 ? 1001 : 61000;
               timer = setInterval(redrawView, delay);
             }
             break;
@@ -201,19 +202,16 @@
       }
 
       // Formats time in seconds into a reasonable human-readable string.
-      // TODO: is there no normal string formatting in JS?
       function formatTime(seconds) {
-        seconds = Math.round(seconds);
-        if (seconds < 60) {
-          return `${seconds}s`;
-        } else if (seconds < 3600) {
-          const minutes = Math.floor(seconds / 60);
-          const remainingSeconds = seconds % 60;
-          return `${minutes}m${remainingSeconds.toString().padStart(2, "0")}s`;
+        const hrs = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor((seconds % 3600) % 60);
+        if (hrs != 0) {
+          return `${hrs}h${mins.toString().padStart(2, "0")}m`;
+        } else if (mins != 0) {
+          return `${mins}m${secs.toString().padStart(2, "0")}s`;
         } else {
-          const hours = Math.floor(seconds / 3600);
-          const remainingMinutes = Math.floor((seconds % 3600) / 60);
-          return `${hours}h${remainingMinutes.toString().padStart(2, "0")}m`;
+          return `${secs}s`;
         }
       }
 
@@ -246,6 +244,15 @@
         xhr.send(JSON.stringify(dataToSend));
       }
 
+      // Formats current date as 'YYYY-MM-DD'...
+      function formatCurrentDate() {
+        const date = new Date();
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, "0");
+        const day = date.getDate().toString().padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+
       // Template for drawing the div with full info, including "progress bar",
       // buttons in correct states, and text.
       const template = `
@@ -258,6 +265,7 @@
           </svg>
           <div class="content-div" style="grid-row: 2; display: flex; justify-content: space-between;">
             <span style="text-align: left;">work→ %WORK_TIME%</span>
+            <span style="text-align: middle;">%CURRENT_DATE%</span>
             <span style="text-align: right;">%REST_TIME% ←rest</span>
           </div>
           <div class="content-div button-container" style="grid-row: 3;">
