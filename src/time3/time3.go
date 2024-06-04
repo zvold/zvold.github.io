@@ -54,16 +54,16 @@ func modeFromString(str string) *ModeType {
 // don't reflect the "total" time on their own.
 type State struct {
 	sync.Mutex
-	work      int64     // Time spent working, in seconds.
-	rest      int64     // Time spent resting, in seconds.
-	mode      ModeType  // Current mode.
-	modeStart time.Time // Time of the last mode switch.
+	work      time.Duration // Duration of time spent working.
+	rest      time.Duration // Duration of time spent resting.
+	mode      ModeType      // Current mode.
+	modeStart time.Time     // Time of the last mode switch.
 }
 
 // Initialize the counter in the 'off' mode.
 var state = State{
-	work:      1,
-	rest:      1,
+	work:      time.Second,
+	rest:      time.Second,
 	mode:      Off,
 	modeStart: time.Now(),
 }
@@ -78,14 +78,14 @@ func (state *State) writeHtmlResponse(
 
 	// A struct for passing the State to the HTML template.
 	data := struct {
-		Work      int64 // JS code expects this in seconds.
-		Rest      int64 // Same.
+		Work      float64 // JS code expects this in seconds.
+		Rest      float64 // Same.
 		Mode      string
 		ModeStart int64  // JS code expects this in milliseconds.
 		Address   string // IPv4 address of the server.
 	}{
-		Work:      state.work,
-		Rest:      state.rest,
+		Work:      state.work.Seconds(),
+		Rest:      state.rest.Seconds(),
 		Mode:      state.mode.toString(),
 		ModeStart: state.modeStart.UnixMilli(),
 		Address:   serverAddress.String(),
@@ -94,29 +94,32 @@ func (state *State) writeHtmlResponse(
 	return tmpl.Execute(w, data)
 }
 
-// Returns the full time as a (work, rest) tuple, in seconds.
-// Assumes the caller handles the mutex appropriately.
-func (state *State) totalTime() (int64, int64) {
-	var duration = time.Since(state.modeStart)
-	switch state.mode {
-	case Work:
-		return state.work + int64(duration.Seconds()), state.rest
-	case Rest:
-		return state.work, state.rest + int64(duration.Seconds())
-	case Off:
-		return state.work, state.rest
-	}
-	panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
-}
-
 // Returns the State as a JSON string.
 func (state *State) toJson() string {
 	state.Lock()
 	defer state.Unlock()
 
 	return fmt.Sprintf(
-		`{"mode": "%s", "work": %d, "rest": %d, "modeStart": %d}`,
-		state.mode.toString(), state.work, state.rest, state.modeStart.UnixMilli())
+		`{"mode": "%s", "work": %.2f, "rest": %.2f, "modeStart": %d}`,
+		state.mode.toString(),
+		state.work.Seconds(),
+		state.rest.Seconds(),
+		state.modeStart.UnixMilli())
+}
+
+// Returns the full time as a (work, rest) tuple, in seconds.
+// Assumes the caller handles the mutex appropriately.
+func (state *State) totalTime() (time.Duration, time.Duration) {
+	var duration = time.Since(state.modeStart)
+	switch state.mode {
+	case Work:
+		return state.work + duration, state.rest
+	case Rest:
+		return state.work, state.rest + duration
+	case Off:
+		return state.work, state.rest
+	}
+	panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
 }
 
 // Changes the current mode (if necessary).
