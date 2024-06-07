@@ -64,7 +64,6 @@
         "rest": {{.Rest}}, // Rest time in seconds.
         "modeStart": {{.ModeStart}}, // Time when mode last changed in millis.
       }
-      var address = {{.Address}};
       var timer = null;
 
       // Parse the target percentage from an optional URL parameter 't'.
@@ -99,28 +98,26 @@
 
       // Sets or removes the "fast update" timer, depending on the mode.
       function setOrClearTimer() {
+        if (timer != null) {
+          clearInterval(timer)
+          timer = null
+        }
         const durations = totalTime();
         switch(state.mode) {
-          case "work":
-            if (timer == null) {
-              // Redraw only as frequently as the text changes.
-              const delay = durations.totalWork < 3600 ? 1001 : 61000;
-              timer = setInterval(redrawView, delay);
-            }
+          case "work": {
+            // Redraw only as frequently as the text changes.
+            const delay = durations.totalWork < 3600 ? 1001 : 61000;
+            timer = setInterval(redrawView, delay);
             break;
-          case "rest":
-            if (timer == null) {
-              // Redraw only as frequently as the text changes.
-              const delay = durations.totalRest < 3600 ? 1001 : 61000;
-              timer = setInterval(redrawView, delay);
-            }
+          }
+          case "rest": {
+            // Redraw only as frequently as the text changes.
+            const delay = durations.totalRest < 3600 ? 1001 : 61000;
+            timer = setInterval(redrawView, delay);
             break;
+          }
           case "off":
-            if (timer != null) {
-              // No need to redraw in the "off" mode as nothing changes.
-              clearInterval(timer);
-              timer = null;
-            }
+            // No need to redraw in the "off" mode as nothing changes.
             break;
         }
       }
@@ -219,7 +216,7 @@
       // back the up-to-date state (work/rest times and the current mode).
       function updateServerMode(newMode) {
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", address + ":37177");
+        xhr.open("POST", window.location.origin);
         xhr.setRequestHeader("Content-Type", "application/json");
 
         var dataToSend = {};

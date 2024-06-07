@@ -3,21 +3,55 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"html/template"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
 
+var portFlag = flag.Int("port", 37177, "Port to listen on.")
+
 //go:embed template.html
 var f embed.FS
 
-// IPv4 address on which the server should be reachable.
-var serverAddress net.IP
+// Clock interface is injected for better testing.
+type Clock interface {
+	Now() time.Time
+}
+
+// *NormalClock satisfies the Clock interface.
+type NormalClock struct{}
+
+func (c *NormalClock) Now() time.Time {
+	return time.Now()
+}
+
+var clock Clock = &NormalClock{}
+
+// The set of remote hosts seen during the operation.
+type RemoteHosts struct {
+	sync.Mutex
+	set map[string]bool
+}
+
+// Adds the key to 'hosts' set and returns 'true' if it was a new key.
+func (hosts *RemoteHosts) add(key string) bool {
+	hosts.Lock()
+	defer hosts.Unlock()
+	if _, ok := hosts.set[key]; ok {
+		return false
+	}
+	hosts.set[key] = true
+	return true
+}
+
+var remoteHosts = RemoteHosts{
+	set: make(map[string]bool),
+}
 
 // ModeType is an enum representing the possible "modes": work, rest and off.
 type ModeType int
@@ -30,6 +64,9 @@ const (
 
 // Returns a string representation of a given ModeType.
 func (m ModeType) toString() string {
+	if m < 0 || m > 2 {
+		return "unknown"
+	}
 	return []string{"work", "rest", "off"}[m]
 }
 
@@ -65,7 +102,7 @@ var state = State{
 	work:      time.Second,
 	rest:      time.Second,
 	mode:      Off,
-	modeStart: time.Now(),
+	modeStart: clock.Now(),
 }
 
 // Populates the HTML page according to the current state and writes it to the
@@ -81,17 +118,20 @@ func (state *State) writeHtmlResponse(
 		Work      float64 // JS code expects this in seconds.
 		Rest      float64 // Same.
 		Mode      string
-		ModeStart int64  // JS code expects this in milliseconds.
-		Address   string // IPv4 address of the server.
+		ModeStart int64 // JS code expects this in milliseconds.
 	}{
 		Work:      state.work.Seconds(),
 		Rest:      state.rest.Seconds(),
 		Mode:      state.mode.toString(),
 		ModeStart: state.modeStart.UnixMilli(),
-		Address:   serverAddress.String(),
 	}
 
 	return tmpl.Execute(w, data)
+}
+
+// Returns the State as a human-readable string.
+func (state *State) String() string {
+	return state.toJson()
 }
 
 // Returns the State as a JSON string.
@@ -107,54 +147,108 @@ func (state *State) toJson() string {
 		state.modeStart.UnixMilli())
 }
 
-// Returns the full time as a (work, rest) tuple, in seconds.
-// Assumes the caller handles the mutex appropriately.
-func (state *State) totalTime() (time.Duration, time.Duration) {
-	var duration = time.Since(state.modeStart)
+// Resets 'modeStart' to 'time.Now()', and updates the 'work' and 'rest' times.
+// Assumes the mutex is locked and unlocked by the caller.
+func (state *State) resetModeStart() {
+	var now = clock.Now()
+	var duration = now.Sub(state.modeStart)
+	if duration < 0 {
+		fmt.Println("Resetting backwards in time, ignoring.")
+		return
+	}
+
 	switch state.mode {
 	case Work:
-		return state.work + duration, state.rest
+		state.work += duration
+		break
 	case Rest:
-		return state.work, state.rest + duration
+		state.rest += duration
+		break
 	case Off:
-		return state.work, state.rest
+		// No-op
+		break
+	default:
+		panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
 	}
-	panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
+
+	state.modeStart = now
 }
 
 // Changes the current mode (if necessary).
-func (state *State) changeMode(newMode ModeType) {
-	if state.mode == newMode {
+func (state *State) changeMode(modeString string) {
+	newMode := modeFromString(modeString)
+	if newMode == nil {
+		fmt.Printf("Unknown mode specified: %v, ignoring.\n", modeString)
+		return
+	}
+	if state.mode == *newMode {
 		return
 	}
 	state.Lock()
 	defer state.Unlock()
 
-	state.work, state.rest = state.totalTime()
-	state.modeStart = time.Now()
-	state.mode = newMode
+	state.resetModeStart()
+	state.mode = *newMode
 }
 
-// Finds IPv4 non-loopback address among available interfaces, or fails.
-func findNonLoopbackAddress() net.IP {
-	addrs, err := net.InterfaceAddrs()
+// Patches the value at time.Duration address. Minimum resulting duration is 1s.
+// Assumes the State mutex is handled by the caller as necessary.
+func patchDuration(field *time.Duration, str string) {
+	if str == "" {
+		return
+	}
+	duration, err := time.ParseDuration(str)
 	if err != nil {
-		fmt.Printf("Cannot list network interfaces: %v", err)
-		os.Exit(1)
+		fmt.Printf("Cannot parse duration: %v, ignoring.\n", str)
+		return
+	}
+	*field += duration
+	if *field < time.Second {
+		*field = time.Second
+	}
+}
+
+// Patches work/rest durations, based on strings in time.Duration format.
+func (state *State) patchDurations(workString string, restString string) {
+	state.Lock()
+	defer state.Unlock()
+
+	state.resetModeStart()
+	patchDuration(&state.work, workString)
+	patchDuration(&state.rest, restString)
+}
+
+// Constructs a human-readable string representing the remote host.
+func getRemoteHost(r *http.Request) (key string) {
+	key = r.RemoteAddr
+	host, _, err := net.SplitHostPort(key)
+	if err == nil {
+		key = host
+	}
+	return fmt.Sprintf("%s | %s | %s", key, r.Header.Get("X-Forwarded-For"), r.UserAgent())
+}
+
+// JsonRequest struct represents the body of HTTP POST request.
+type JsonRequest struct {
+	Mode string
+	Work string
+	Rest string
+}
+
+// Returns JsonRequest for the HTTP request body, or nil in case of errors.
+func parseRequestBody(r *http.Request) (*JsonRequest, error) {
+	bodyBytes, err := ioutil.ReadAll(r.Body)
+	defer r.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("Error reading request body: %v", err)
 	}
 
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ip4 := ipnet.IP.To4(); ip4 != nil {
-				return ip4
-			}
-		}
+	var result JsonRequest
+	err = json.Unmarshal(bodyBytes, &result)
+	if err != nil {
+		return nil, fmt.Errorf("Error while unmarshalling: %v", err)
 	}
-
-	fmt.Printf("Cannot find non-loopback IPv4 address.")
-	os.Exit(1)
-
-	panic("Unreachable")
+	return &result, nil
 }
 
 // Starts an HTTP server which:
@@ -163,9 +257,13 @@ func findNonLoopbackAddress() net.IP {
 //   - Accepts requests for mode changes via HTTP POST and responds with a JSON
 //     encoded current State.
 func main() {
-	serverAddress = findNonLoopbackAddress()
-
+	flag.Parse()
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		key := getRemoteHost(r)
+		if remoteHosts.add(key) {
+			fmt.Printf("New remote host:\t%s\n", key)
+		}
+
 		if r.Method == "GET" {
 			// Request fetching the full HTML page for the current state.
 			tmpl, err := template.ParseFS(f, "template.html")
@@ -185,41 +283,24 @@ func main() {
 				fmt.Fprintf(w, state.toJson())
 			}()
 
-			bodyBytes, err := ioutil.ReadAll(r.Body)
-			defer r.Body.Close()
+			jsonRequest, err := parseRequestBody(r)
 			if err != nil {
-				http.Error(w, fmt.Sprintf("Error reading request body: %v.", err), http.StatusBadRequest)
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 
-			type Request struct {
-				Mode string
+			if jsonRequest.Work != "" || jsonRequest.Rest != "" {
+				// This is a request for patching work/rest durations.
+				state.patchDurations(jsonRequest.Work, jsonRequest.Rest)
+			} else if jsonRequest.Mode != "" {
+				// This is a request attempting to update the mode.
+				state.changeMode(jsonRequest.Mode)
 			}
-
-			var request Request
-			err = json.Unmarshal(bodyBytes, &request)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Error while unmarshalling: %v.", err), http.StatusBadRequest)
-				return
-			}
-
-			if len(request.Mode) == 0 {
-				// This is just a refresh request (empty body).
-				return
-			}
-
-			newMode := modeFromString(request.Mode)
-			if newMode == nil {
-				fmt.Printf("Unknown mode specified: %v\n", request.Mode)
-				return
-			}
-
-			state.changeMode(*newMode)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
 
-	fmt.Printf("Server listening on %s:37177...\n", serverAddress.String())
-	http.ListenAndServe(":37177", nil)
+	fmt.Printf("Server listening on port %d...\n", *portFlag)
+	http.ListenAndServe(fmt.Sprintf(":%d", *portFlag), nil)
 }
