@@ -32,13 +32,24 @@
         border: 1px solid #aaa;
       }
 
-      .button.pressed {
+      .button.pressed, #button-reset:active {
         box-shadow: inset -1px -1px #ffffff,
                     inset  1px  1px #0a0a0a,
                     inset -2px -2px #dfdfdf,
                     inset  2px  2px #808080;
         background-color: #ddd;
         border: 1px solid #aaa;
+      }
+
+      .butterbar {
+        width: 100%;
+        background-color: #ad8900;
+        border-radius: 5px;
+        text-align: center;
+      }
+
+      .butterbar.hidden {
+        display: none;
       }
 
       * {
@@ -55,7 +66,7 @@
       }
     </style>
     <script>
-      // Main data structure representing the full state of the counter.
+      // Main data structure representing the full state of the punch clock.
       // Note that to get the full "work" or "rest" time, the time of the last
       // mode change has to be taken into account.
       var state = {
@@ -64,7 +75,9 @@
         "rest": {{.Rest}}, // Rest time in seconds.
         "modeStart": {{.ModeStart}}, // Time when mode last changed in millis.
       }
-      var timer = null;
+      var viewTimer = null;
+      var ws = null;
+      var reconnectTimer = null;
 
       // Parse the target percentage from an optional URL parameter 't'.
       const urlParams = new URLSearchParams(window.location.search);
@@ -72,7 +85,38 @@
       if (urlParams.get('t') != null) {
         const parsedInt = parseInt(urlParams.get('t'))
         if (!isNaN(parsedInt) && parsedInt > 0 && parsedInt <= 100) {
-          target = parsedInt
+          target = parsedInt;
+        }
+      }
+
+      // Creates the websocket connection if necessary.
+      function createWebSocketConnection() {
+        if (ws != null) {
+          return;
+        }
+        const url = new URL(window.location.origin);
+        ws = new WebSocket(`ws://${url.hostname}:${url.port}/ws`);
+        ws.onopen = function(evt) {
+          console.log("websocket onopen()");
+          if (reconnectTimer != null) {
+            clearInterval(reconnectTimer);
+          }
+          redrawView(); // This will hide the butterbar.
+        }
+        ws.onclose = function(evt) {
+          console.log("websocket onclose()");
+          ws = null;
+          reconnectTimer = setInterval(createWebSocketConnection, 5000);
+          redrawView(); // This will show the butterbar.
+        }
+        ws.onmessage = function(evt) {
+          console.log("websocket onmessage(): " + evt.data);
+          if (typeof evt.data === "string") {
+            updateViewFromServerState(evt.data);
+          }
+        }
+        ws.onerror = function(evt) {
+          console.log("websocket onerror(): " + evt.data);
         }
       }
 
@@ -88,6 +132,7 @@
           .replaceAll("%REST_TIME%", formatTime(durations.totalRest))
           .replaceAll("%TARGET_X%", 400.0 * target / 100.0)
           .replaceAll("%" + state.mode + "%", "pressed")
+          .replaceAll("%BB_CLASS%", ws == null ? "butterbar" : "butterbar hidden")
           .replace(/%(work|rest|off)%/g, "");
 
         return new DOMParser()
@@ -96,24 +141,24 @@
           .firstChild;
       }
 
-      // Sets or removes the "fast update" timer, depending on the mode.
+      // Sets or removes the "fast update" view timer, depending on the mode.
       function setOrClearTimer() {
-        if (timer != null) {
-          clearInterval(timer)
-          timer = null
+        if (viewTimer != null) {
+          clearInterval(viewTimer)
+          viewTimer = null
         }
         const durations = totalTime();
         switch(state.mode) {
           case "work": {
             // Redraw only as frequently as the text changes.
             const delay = durations.totalWork < 3600 ? 1001 : 61000;
-            timer = setInterval(redrawView, delay);
+            viewTimer = setInterval(redrawView, delay);
             break;
           }
           case "rest": {
             // Redraw only as frequently as the text changes.
             const delay = durations.totalRest < 3600 ? 1001 : 61000;
-            timer = setInterval(redrawView, delay);
+            viewTimer = setInterval(redrawView, delay);
             break;
           }
           case "off":
@@ -129,34 +174,22 @@
         if (state.mode == newMode) {
           return;
         }
-        switch(newMode) {
-          case "work":
-            setPressed("work", true);
-            setPressed("rest", false);
-            setPressed("off", false);
-            break;
-          case "rest":
-            setPressed("work", false);
-            setPressed("rest", true);
-            setPressed("off", false);
-            break;
-          case "off":
-            setPressed("work", false);
-            setPressed("rest", false);
-            setPressed("off", true);
-            break;
-        }
-        const durations = totalTime();
-        state.work = durations.totalWork;
-        state.rest = durations.totalRest;
+        // Set pressed/unpressed status for buttons.
+        ["work", "rest", "off"]
+            .forEach(function(str) {setPressed(str, newMode == str);});
 
-        state.mode = newMode;
-        state.modeStart = Date.now();
+        const durations = totalTime();
+        state = {
+          "mode": newMode,
+          "work": durations.totalWork,
+          "rest": durations.totalRest,
+          "modeStart": Date.now(),
+        }
 
         setOrClearTimer();
-        console.log("mode switched to: ", state.mode)
-
         updateServerMode(newMode);
+
+        console.log("mode switched to: ", state.mode)
       }
 
       // Convenience function to re-draw the specified button as pressed or not.
@@ -212,33 +245,49 @@
         }
       }
 
-      // Sends an HTTP POST request with (optionally) the new mode and receives
-      // back the up-to-date state (work/rest times and the current mode).
-      function updateServerMode(newMode) {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", window.location.origin);
-        xhr.setRequestHeader("Content-Type", "application/json");
-
-        var dataToSend = {};
-        if (newMode != null) {
-          dataToSend = { mode: newMode, };
+      // Parses 'message' as state in JSON format, and updates the local state
+      // based on it.
+      function updateViewFromServerState(message) {
+        const responseJson = JSON.parse(message);
+        if (responseJson.mode != state.mode) {
+          console.log("server mode correction: ", responseJson)
         }
+        state = responseJson
+        redrawView();
+        setOrClearTimer();
+      }
 
-        xhr.onload = function() {
-          if (xhr.status === 200) {
-            const responseJson = JSON.parse(xhr.responseText);
-            if (responseJson.mode != state.mode) {
-              console.log("server mode correction: ", responseJson)
+      // Sends a message to the server. Uses websocket connection if available,
+      // otherwise falls back to an HTTP POST request.
+      function sendMessage(message) {
+        if (ws != null) {
+          console.log("sending websocket request: " + message)
+          ws.send(message);
+        } else {
+          console.log("sending HTTP POST request: " + message)
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", window.location.origin);
+          xhr.setRequestHeader("Content-Type", "application/json");
+
+          xhr.onload = function() {
+            if (xhr.status === 200) {
+              updateViewFromServerState(xhr.responseText);
+            } else {
+              console.error("Error fetching data:", xhr.statusText);
             }
-            state = responseJson
-            redrawView();
-            setOrClearTimer();
-          } else {
-            console.error("Error fetching data:", xhr.statusText);
-          }
-        };
+          };
+          xhr.send(message);
+        }
+      }
 
-        xhr.send(JSON.stringify(dataToSend));
+      // Sends a message to update the mode.
+      function updateServerMode(newMode) {
+        sendMessage('{"mode": "' + newMode + '"}');
+      }
+
+      // Effectively "resets" work/rest time on the server by subtracting 100h.
+      function reset() {
+        sendMessage('{"work": "-100h", "rest": "-100h"}');
       }
 
       // Formats current date as 'YYYY-MM-DD'...
@@ -253,8 +302,8 @@
       // Template for drawing the div with full info, including "progress bar",
       // buttons in correct states, and text.
       const template = `
-        <div class="grid-container">
-          <svg width="401" height="40" stroke-width="2" stroke="black">
+        <div class="grid-container" style="width: 401px;">
+          <svg style="grid-row: 1;" width="401" height="40" stroke-width="2" stroke="black">
             <rect x="0" y="10" width="%SPLIT_POSITION%" height="20" fill="#0072d4"/>
             <rect x="%SPLIT_POSITION%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
             <rect x="1" y="10" width="400" height="20" fill="transparent"/>
@@ -262,7 +311,7 @@
           </svg>
           <div class="content-div" style="grid-row: 2; display: flex; justify-content: space-between;">
             <span style="text-align: left;">work→ %WORK_TIME%</span>
-            <span style="text-align: middle;">%CURRENT_DATE%</span>
+            <span style="text-align: center;">%CURRENT_DATE%</span>
             <span style="text-align: right;">%REST_TIME% ←rest</span>
           </div>
           <div class="content-div button-container" style="grid-row: 3;">
@@ -275,17 +324,20 @@
             <button id="button-off" class="button %off%" onclick="changeMode('off')">
               off the clock
             </button>
+            <button id="button-reset" class="button" style="margin-left: auto; margin-right: 0px;"
+                    onclick="reset()">
+              ⟲
+            </button>
+          </div>
+          <div id="butterbar" class="%BB_CLASS%" style="grid-row: 4; padding: 5px 0px;">
+              Lost server connection, re-establishing...
           </div>
         </div>
         `
-
       window.onload = function() {
+        createWebSocketConnection();
         redrawView();
         setOrClearTimer();
-
-        // Add a "slow" timer for periodic server state synchronization.
-        // TODO: use web sockets (?) for immediate server->client updates.
-        setInterval(function() {updateServerMode(null);}, 15000);
       };
     </script>
   </head>

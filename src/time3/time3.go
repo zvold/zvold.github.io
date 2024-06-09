@@ -11,12 +11,19 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 var portFlag = flag.Int("port", 37177, "Port to listen on.")
 
 //go:embed template.html
 var f embed.FS
+
+// Maintains a map of all currently connected clients.
+var clients = WsClients{
+	clients: make(map[*WsClient]int),
+}
 
 // Clock interface is injected for better testing.
 type Clock interface {
@@ -32,7 +39,7 @@ func (c *NormalClock) Now() time.Time {
 
 var clock Clock = &NormalClock{}
 
-// The set of remote hosts seen during the operation.
+// The set of remote hosts (IP + user agent) seen during the operation.
 type RemoteHosts struct {
 	sync.Mutex
 	set map[string]bool
@@ -86,9 +93,9 @@ func modeFromString(str string) *ModeType {
 	return &result
 }
 
-// State struct represents the full state of the counter. Note that it is
+// State struct represents the full state of the punch clock. Note that it is
 // mutated only when the mode is changed. That is, the 'work' and 'rest' fields
-// don't reflect the "total" time on their own.
+// don't reflect the "total" durations on their own.
 type State struct {
 	sync.Mutex
 	work      time.Duration // Duration of time spent working.
@@ -97,7 +104,7 @@ type State struct {
 	modeStart time.Time     // Time of the last mode switch.
 }
 
-// Initialize the counter in the 'off' mode.
+// Initialize the punch clock. It starts in the 'off' mode.
 var state = State{
 	work:      time.Second,
 	rest:      time.Second,
@@ -125,7 +132,6 @@ func (state *State) writeHtmlResponse(
 		Mode:      state.mode.toString(),
 		ModeStart: state.modeStart.UnixMilli(),
 	}
-
 	return tmpl.Execute(w, data)
 }
 
@@ -160,13 +166,10 @@ func (state *State) resetModeStart() {
 	switch state.mode {
 	case Work:
 		state.work += duration
-		break
 	case Rest:
 		state.rest += duration
-		break
 	case Off:
 		// No-op
-		break
 	default:
 		panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
 	}
@@ -228,7 +231,7 @@ func getRemoteHost(r *http.Request) (key string) {
 	return fmt.Sprintf("%s | %s | %s", key, r.Header.Get("X-Forwarded-For"), r.UserAgent())
 }
 
-// JsonRequest struct represents the body of HTTP POST request.
+// JsonRequest struct represents the body of an HTTP POST request.
 type JsonRequest struct {
 	Mode string
 	Work string
@@ -249,6 +252,20 @@ func parseRequestBody(r *http.Request) (*JsonRequest, error) {
 		return nil, fmt.Errorf("Error while unmarshalling: %v", err)
 	}
 	return &result, nil
+}
+
+// Understands various possibilities present in the JsonRequest and updates the
+// state accordingly.
+func handleJsonRequest(jsonRequest *JsonRequest) {
+	if jsonRequest.Work != "" || jsonRequest.Rest != "" {
+		// This is a request for patching work/rest durations.
+		state.patchDurations(jsonRequest.Work, jsonRequest.Rest)
+		clients.broadcast(state.toJson())
+	} else if jsonRequest.Mode != "" {
+		// This is a request attempting to update the mode.
+		state.changeMode(jsonRequest.Mode)
+		clients.broadcast(state.toJson())
+	}
 }
 
 // Starts an HTTP server which:
@@ -277,7 +294,7 @@ func main() {
 				return
 			}
 		} else if r.Method == "POST" {
-			// Request (potentially) modifying the mode and getting the new state.
+			// Request (potentially) modifying the state.
 			defer func() {
 				// Always return the current state, even on invalid requests.
 				fmt.Fprintf(w, state.toJson())
@@ -288,16 +305,58 @@ func main() {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-
-			if jsonRequest.Work != "" || jsonRequest.Rest != "" {
-				// This is a request for patching work/rest durations.
-				state.patchDurations(jsonRequest.Work, jsonRequest.Rest)
-			} else if jsonRequest.Mode != "" {
-				// This is a request attempting to update the mode.
-				state.changeMode(jsonRequest.Mode)
-			}
+			handleJsonRequest(jsonRequest)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		c, err := upgrader.Upgrade(w, r, nil)
+
+		if err != nil {
+			fmt.Printf("websocket upgrade failed, closing: %s\n", err)
+			return
+		}
+
+		client := WsClient{conn: c}
+		clients.add(&client)
+
+		defer func() {
+			clients.remove(&client)
+			c.Close()
+		}()
+
+		fmt.Println("websocket connection established, looping...")
+		err = client.send(state.toJson())
+		if err == nil {
+			fmt.Printf("sent the current state: %s\n", state.String())
+		}
+
+		for {
+			mtype, message, err := c.ReadMessage()
+			if err != nil {
+				fmt.Printf("websocket read error, closing: %s\n", err)
+				break
+			}
+
+			fmt.Printf("websocket message received (type %d): %s\n", mtype, message)
+			switch mtype {
+			case websocket.TextMessage:
+				var jsonRequest JsonRequest
+				err = json.Unmarshal(message, &jsonRequest)
+				if err != nil {
+					fmt.Printf("Error while unmarshalling, ignoring: %s\n", err)
+					break
+				}
+				handleJsonRequest(&jsonRequest)
+			case websocket.CloseMessage:
+				fmt.Printf("websocket close received, closing.\n")
+				return
+			default:
+				// no-op
+			}
 		}
 	})
 
