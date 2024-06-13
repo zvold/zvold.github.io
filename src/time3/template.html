@@ -5,25 +5,43 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Punch Clock 3000</title>
     <style>
-      .grid-container {
+      html {
+        font-size: 100%;
+      }
+      body {
+        background-color: #aaa;
+      }
+      * {
+        font-family: serif;
+        font-size: 1rem;
+      }
+
+      .root-container {
         display: grid;
         grid-template-columns: 1fr;
         width: fit-content;
+        position: absolute;
+        left: 10px; top: 10px;
       }
 
-      .content-div {
-        width: 100%;
+      #svg-container {
+        width: 401px;
+        height: 40px;
+      }
+
+      .text-container {
+         display: flex;
+         justify-content: space-between;
       }
 
       .button-container {
         display: flex;
       }
-
       .button-container button {
         margin: 10px 10px 10px 0px;
       }
 
-      .button {
+      button.unpressed {
         box-shadow: inset -1px -1px #0a0a0a,
                     inset  1px  1px #ffffff,
                     inset -2px -2px grey,
@@ -31,8 +49,7 @@
         background-color: #ddd;
         border: 1px solid #aaa;
       }
-
-      .button.pressed, #button-reset:active {
+      button.pressed, button:active {
         box-shadow: inset -1px -1px #ffffff,
                     inset  1px  1px #0a0a0a,
                     inset -2px -2px #dfdfdf,
@@ -41,28 +58,16 @@
         border: 1px solid #aaa;
       }
 
-      .butterbar {
+      #butterbar {
         width: 100%;
         background-color: #ad8900;
         border-radius: 5px;
         text-align: center;
+        padding: 5px 0px;
       }
-
-      .butterbar.hidden {
+      #butterbar.hidden {
         display: none;
-      }
-
-      * {
-        font-family: serif;
-        font-size: 1rem;
-      }
-
-      body {
-        background-color: #aaa;
-      }
-
-      html {
-        font-size: 100%;
+        visibility: hidden;
       }
     </style>
     <script>
@@ -101,13 +106,13 @@
           if (reconnectTimer != null) {
             clearInterval(reconnectTimer);
           }
-          redrawView(); // This will hide the butterbar.
+          showButterbar(false);
         }
         ws.onclose = function(evt) {
           console.log("websocket onclose()");
           ws = null;
           reconnectTimer = setInterval(createWebSocketConnection, 5000);
-          redrawView(); // This will show the butterbar.
+          showButterbar(true);
         }
         ws.onmessage = function(evt) {
           console.log("websocket onmessage(): " + evt.data);
@@ -120,25 +125,21 @@
         }
       }
 
+      // Convenience function for calculating the position of the progress bar.
+      function ratio(duration) {
+        return duration.totalWork / (duration.totalWork + duration.totalRest);
+      }
+
       // Render ready-to-use div element representing the current state.
       // This includes progress bar, correctly pressed buttons, text, etc.
       function renderTemplate() {
-        const durations = totalTime();
+        const r = ratio(totalTime());
         const str = template
-          .replaceAll("%CURRENT_DATE%", formatCurrentDate())
-          .replaceAll("%SPLIT_POSITION%", 400.0 * ratio(durations))
-          .replaceAll("%REST_WIDTH%", 400.0 * (1.0 - ratio(durations)))
-          .replaceAll("%WORK_TIME%", formatTime(durations.totalWork))
-          .replaceAll("%REST_TIME%", formatTime(durations.totalRest))
-          .replaceAll("%TARGET_X%", 400.0 * target / 100.0)
-          .replaceAll("%" + state.mode + "%", "pressed")
-          .replaceAll("%BB_CLASS%", ws == null ? "butterbar" : "butterbar hidden")
-          .replace(/%(work|rest|off)%/g, "");
-
+            .replaceAll("%SPLIT_POS%", 400.0 * r)
+            .replaceAll("%REST_WIDTH%", 400.0 * (1.0 - r))
+            .replaceAll("%TARGET_X%", 400.0 * target / 100.0);
         return new DOMParser()
-          .parseFromString(str, "text/html")
-          .body
-          .firstChild;
+            .parseFromString(str, "text/html").body.firstChild;
       }
 
       // Sets or removes the "fast update" view timer, depending on the mode.
@@ -167,37 +168,34 @@
         }
       }
 
-      // Changes (potentially) the current mode, first locally, then by
-      // requesting the mode change server-side. The server is the source of
-      // truth, so the final mode is decided based on server's response.
+      // Changes (potentially) the current mode by requesting the mode change
+      // server-side. The client-side state is updated based on server response.
+      // TODO: request mode change on mouse-down instead of onclick?
       function changeMode(newMode) {
         if (state.mode == newMode) {
           return;
         }
-        // Set pressed/unpressed status for buttons.
+
+        // Set pressed/unpressed status for buttons to reduce flicker.
         ["work", "rest", "off"]
             .forEach(function(str) {setPressed(str, newMode == str);});
 
-        const durations = totalTime();
-        state = {
-          "mode": newMode,
-          "work": durations.totalWork,
-          "rest": durations.totalRest,
-          "modeStart": Date.now(),
-        }
-
-        setOrClearTimer();
-        updateServerMode(newMode);
-
-        console.log("mode switched to: ", state.mode)
+        // Request server-side mode change.
+        sendMessage('{"mode": "' + newMode + '"}');
       }
 
       // Convenience function to re-draw the specified button as pressed or not.
       // This doesn't mutate the actual state in any way.
       function setPressed(buttonId, isPressed) {
         document
-            .getElementById("button-" + buttonId)
-            .setAttribute("class", isPressed ? "button pressed" : "button");
+            .getElementById(`button-${buttonId}`)
+            .setAttribute("class", isPressed ? "pressed" : "unpressed");
+      }
+
+      // Convenience function for updating the butterbar visibility.
+      function showButterbar(isVisible) {
+        document.getElementById("butterbar")
+            .setAttribute("class", isVisible ? "shown" : "hidden");
       }
 
       // Calculates the total work/rest time in seconds and returns it as a map
@@ -213,22 +211,29 @@
         return {"totalWork": state.work, "totalRest": state.rest};
       }
 
-      // Convenience function for calculating the position of the progress bar.
-      function ratio(durations) {
-        if (durations.totalRest != 0) {
-          return 1.0 * durations.totalWork
-                     / (durations.totalWork + durations.totalRest);
-        }
-        return 1.0;
-      }
-
-      // Completely re-draws the view (progress bar, text and buttons).
+      // Completely re-draws the view (progress bar, text, buttons, butterbar).
       function redrawView() {
-        const progressDiv = renderTemplate();
-        const parent = document.getElementById("progress-div")
-        const oldChild = parent.firstElementChild;
+        // Update "progress bar" SVG.
+        const oldChild = document.getElementById("svg-container");
+        const parent = oldChild.parentElement;
+        parent.replaceChild(renderTemplate(), oldChild);
 
-        parent.replaceChild(progressDiv, oldChild);
+        // Update work/rest times.
+        const durations = totalTime();
+        document.getElementById("text-work").innerText =
+            `work→ ${formatTime(durations.totalWork)}`;
+        document.getElementById("text-rest").innerText =
+            `${formatTime(durations.totalRest)} ←rest`;
+        document.getElementById("text-date").innerText =
+            `${formatCurrentDate()}`;
+
+        // Update buttons pressed/unpressed state.
+        setPressed("work", state.mode === "work");
+        setPressed("rest", state.mode === "rest");
+        setPressed("off", state.mode === "off");
+
+        // Set butterbar visibility.
+        showButterbar(ws == null || ws.readyState != WebSocket.OPEN);
       }
 
       // Formats time in seconds into a reasonable human-readable string.
@@ -250,9 +255,12 @@
       function updateViewFromServerState(message) {
         const responseJson = JSON.parse(message);
         if (responseJson.mode != state.mode) {
-          console.log("server mode correction: ", responseJson)
+          console.log("server mode correction: ", responseJson);
         }
-        state = responseJson
+        // TODO: consider treating _response_ modeStart as "time ago", i.e.
+        //       state.modeStart = now - response.modeStart , so that clock
+        //       difference b/w client and server won't matter.
+        state = responseJson;
         redrawView();
         setOrClearTimer();
       }
@@ -280,60 +288,32 @@
         }
       }
 
-      // Sends a message to update the mode.
-      function updateServerMode(newMode) {
-        sendMessage('{"mode": "' + newMode + '"}');
-      }
-
       // Effectively "resets" work/rest time on the server by subtracting 100h.
       function reset() {
         sendMessage('{"work": "-100h", "rest": "-100h"}');
       }
 
-      // Formats current date as 'YYYY-MM-DD'...
+      // Formats current date as "YYYY-MM-DD"...
       function formatCurrentDate() {
         const date = new Date();
         const year = date.getFullYear();
         const month = (date.getMonth() + 1).toString().padStart(2, "0");
-        const day = date.getDate().toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, "0");
         return `${year}-${month}-${day}`;
       }
 
-      // Template for drawing the div with full info, including "progress bar",
-      // buttons in correct states, and text.
+      // Template for drawing the "progress bar" SVG div.
       const template = `
-        <div class="grid-container" style="width: 401px;">
-          <svg style="grid-row: 1;" width="401" height="40" stroke-width="2" stroke="black">
-            <rect x="0" y="10" width="%SPLIT_POSITION%" height="20" fill="#0072d4"/>
-            <rect x="%SPLIT_POSITION%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
-            <rect x="1" y="10" width="400" height="20" fill="transparent"/>
-            <polygon points="%TARGET_X%, 1, %TARGET_X%, 41" stroke="#ca4898" stroke-dasharray="1, 5"/>
-          </svg>
-          <div class="content-div" style="grid-row: 2; display: flex; justify-content: space-between;">
-            <span style="text-align: left;">work→ %WORK_TIME%</span>
-            <span style="text-align: center;">%CURRENT_DATE%</span>
-            <span style="text-align: right;">%REST_TIME% ←rest</span>
-          </div>
-          <div class="content-div button-container" style="grid-row: 3;">
-            <button id="button-work" class="button %work%" onclick="changeMode('work')">
-              work
-            </button>
-            <button id="button-rest" class="button %rest%" onclick="changeMode('rest')">
-              rest
-            </button>
-            <button id="button-off" class="button %off%" onclick="changeMode('off')">
-              off the clock
-            </button>
-            <button id="button-reset" class="button" style="margin-left: auto; margin-right: 0px;"
-                    onclick="reset()">
-              ⟲
-            </button>
-          </div>
-          <div id="butterbar" class="%BB_CLASS%" style="grid-row: 4; padding: 5px 0px;">
-              Lost server connection, re-establishing...
-          </div>
-        </div>
-        `
+      <div id="svg-container" style="grid-row: 1;">
+        <svg width="401" height="40" stroke-width="2" stroke="black">
+          <rect x="0" y="10" width="%SPLIT_POS%" height="20" fill="#0072d4"/>
+          <rect x="%SPLIT_POS%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
+          <rect x="1" y="10" width="400" height="20" fill="transparent"/>
+          <polygon points="%TARGET_X%, 1, %TARGET_X%, 41" stroke="#ca4898" stroke-dasharray="1, 5"/>
+        </svg>
+      </div>
+      `;
+
       window.onload = function() {
         createWebSocketConnection();
         redrawView();
@@ -342,8 +322,31 @@
     </script>
   </head>
   <body>
-    <div id="progress-div" style="position: absolute; left: 10px; top: 10px;">
-      <div></div>
+    <div class="root-container">
+      <!-- Row 1: the SVG "progress bar". -->
+      <div id="svg-container" style="grid-row: 1;"></div>
+      <!-- Row 2: textual representation of the work/rest durations. -->
+      <div class="text-container" style="grid-row: 2;">
+        <span id="text-work" style="text-align: left;">work→</span>
+        <span id="text-date" style="text-align: center;">()</span>
+        <span id="text-rest" style="text-align: right;">←rest</span>
+      </div>
+      <!-- Row 3: the buttons. -->
+      <div class="button-container" style="grid-row: 3;">
+        <button id="button-work" class="unpressed" onclick="changeMode('work')"
+                title="Click when you're working.">work</button>
+        <button id="button-rest" class="unpressed" onclick="changeMode('rest')"
+                title="Click when you're resting.">rest</button>
+        <button id="button-off" class="pressed" onclick="changeMode('off')"
+                title="Neither working nor resting.">off the clock</button>
+        <button id="button-reset" class="unpressed" onclick="reset()"
+                style="margin-left: auto; margin-right: 0px;"
+                title="DESTRUCTIVELY reset work/rest durations.">↺</button>
+      </div>
+      <!-- Row 4: the optional message butterbar. -->
+      <div id="butterbar" class="shown" style="grid-row: 4;">
+        Lost server connection, re-establishing...
+      </div>
     </div>
   </body>
 </html>

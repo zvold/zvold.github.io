@@ -10,7 +10,7 @@ Usage:
 1. Start the server.
 
    ```
-   go run github.com/zvold/zvold.github.io/src/time3@v0.2.0
+   go run github.com/zvold/zvold.github.io/src/time3@v0.3.0
    ```
 
 2. Start the client(s).

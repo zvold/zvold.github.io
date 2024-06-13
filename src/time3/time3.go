@@ -150,6 +150,8 @@ func (state *State) toJson() string {
 		state.mode.toString(),
 		state.work.Seconds(),
 		state.rest.Seconds(),
+		// TODO: consider _sending_ modeStart as "time ago" (i.e. now-modeStart)
+		//       so that clock difference b/w client and server won't matter.
 		state.modeStart.UnixMilli())
 }
 
