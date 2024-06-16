@@ -5,15 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Punch Clock 3000</title>
     <style>
+      :root {
+        --bg_0:   #fbf3db;
+        --bg_1:   #ece3cc;
+        --bg_2:   #d5cdb6;
+        --dim_0:  #909995;
+        --fg_1:   #3a4d53;
+        --yellow: #ad8900;
+      }
       html {
         font-size: 100%;
       }
       body {
-        background-color: #aaa;
+        background-color: var(--bg_2);
       }
       * {
-        font-family: serif;
-        font-size: 1rem;
+        font-family: monospace;
+        font-size: 1.3rem;
       }
 
       .root-container {
@@ -32,6 +40,7 @@
       .text-container {
          display: flex;
          justify-content: space-between;
+         align-items: flex-end;
       }
 
       .button-container {
@@ -42,25 +51,23 @@
       }
 
       button.unpressed {
-        box-shadow: inset -1px -1px #0a0a0a,
-                    inset  1px  1px #ffffff,
-                    inset -2px -2px grey,
-                    inset  2px  2px #dfdfdf;
-        background-color: #ddd;
-        border: 1px solid #aaa;
+        box-shadow: inset -1px -1px var(--fg_1),
+                    inset  1px  1px var(--bg_0),
+                    inset -2px -2px var(--dim_0);
+        background-color: var(--bg_1);
+        border: 1px solid var(--bg_2);
       }
       button.pressed, button:active {
-        box-shadow: inset -1px -1px #ffffff,
-                    inset  1px  1px #0a0a0a,
-                    inset -2px -2px #dfdfdf,
-                    inset  2px  2px #808080;
-        background-color: #ddd;
-        border: 1px solid #aaa;
+        box-shadow: inset -1px -1px var(--bg_0),
+                    inset  1px  1px var(--fg_1),
+                    inset  2px  2px var(--dim_0);
+        background-color: var(--bg_1);
+        border: 1px solid var(--bg_2);
       }
 
       #butterbar {
         width: 100%;
-        background-color: #ad8900;
+        background-color: var(--yellow);
         border-radius: 5px;
         text-align: center;
         padding: 5px 0px;
@@ -224,8 +231,8 @@
             `work→ ${formatTime(durations.totalWork)}`;
         document.getElementById("text-rest").innerText =
             `${formatTime(durations.totalRest)} ←rest`;
-        document.getElementById("text-date").innerText =
-            `${formatCurrentDate()}`;
+        document.getElementById("text-total").innerText =
+            `${formatTime(durations.totalRest+durations.totalWork)}`;
 
         // Update buttons pressed/unpressed state.
         setPressed("work", state.mode === "work");
@@ -254,15 +261,17 @@
       // based on it.
       function updateViewFromServerState(message) {
         const responseJson = JSON.parse(message);
-        if (responseJson.mode != state.mode) {
-          console.log("server mode correction: ", responseJson);
-        }
-        // TODO: consider treating _response_ modeStart as "time ago", i.e.
-        //       state.modeStart = now - response.modeStart , so that clock
-        //       difference b/w client and server won't matter.
+        const modeChanged = responseJson.mode != state.mode;
         state = responseJson;
+
+        // 'modeStart' in JSON response is formatted as "X milliseconds ago".
+        state.modeStart = Date.now() - state.modeStart;
+
         redrawView();
         setOrClearTimer();
+        if (modeChanged) {
+          console.log("server mode correction: ", responseJson);
+        }
       }
 
       // Sends a message to the server. Uses websocket connection if available,
@@ -304,17 +313,18 @@
 
       // Template for drawing the "progress bar" SVG div.
       const template = `
-      <div id="svg-container" style="grid-row: 1;">
+      <div id="svg-container" style="grid-row: 2;">
         <svg width="401" height="40" stroke-width="2" stroke="black">
           <rect x="0" y="10" width="%SPLIT_POS%" height="20" fill="#0072d4"/>
           <rect x="%SPLIT_POS%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
           <rect x="1" y="10" width="400" height="20" fill="transparent"/>
-          <polygon points="%TARGET_X%, 1, %TARGET_X%, 41" stroke="#ca4898" stroke-dasharray="1, 5"/>
+          <polygon points="%TARGET_X%, 1, %TARGET_X%, 41" stroke="black" stroke-dasharray="1, 5"/>
         </svg>
       </div>
       `;
 
       window.onload = function() {
+        document.getElementById("text-date").innerText = `${formatCurrentDate()}`;
         createWebSocketConnection();
         redrawView();
         setOrClearTimer();
@@ -322,17 +332,32 @@
     </script>
   </head>
   <body>
-    <div class="root-container">
-      <!-- Row 1: the SVG "progress bar". -->
-      <div id="svg-container" style="grid-row: 1;"></div>
-      <!-- Row 2: textual representation of the work/rest durations. -->
-      <div class="text-container" style="grid-row: 2;">
-        <span id="text-work" style="text-align: left;">work→</span>
-        <span id="text-date" style="text-align: center;">()</span>
-        <span id="text-rest" style="text-align: right;">←rest</span>
+    <div class="root-container" style="width: 401px;">
+      <!-- Row 1: the title and current date. -->
+      <div class="text-container" style="grid-row: 1;">
+        <img src="favicon.ico" width="32" height="32"
+             alt="Picture of a tomato." title="Picture of a tomato.">
+        </img>
+        <span style="text-align: left; margin: 0px auto 0px 10px;">Punch Clock 3000</span>
+        <span id="text-date" style="text-align: right;" title="Current date.">today</span>
       </div>
-      <!-- Row 3: the buttons. -->
-      <div class="button-container" style="grid-row: 3;">
+      <!-- Row 2: the SVG "progress bar". -->
+      <div id="svg-container" style="grid-row: 2;"></div>
+      <!-- Row 3: textual representation of the work/rest durations. -->
+      <div class="text-container" style="grid-row: 3;">
+        <span id="text-work" style="text-align: left;" title="Time spent working.">
+          work→
+        </span>
+        <span id="text-total" style="text-align: center; font-weight: bold;"
+              title="Total clocked time (working plus resting).">
+          ()
+        </span>
+        <span id="text-rest" style="text-align: right;" title="Time spent resting.">
+          ←rest
+        </span>
+      </div>
+      <!-- Row 4: the buttons. -->
+      <div class="button-container" style="grid-row: 4;">
         <button id="button-work" class="unpressed" onclick="changeMode('work')"
                 title="Click when you're working.">work</button>
         <button id="button-rest" class="unpressed" onclick="changeMode('rest')"
@@ -343,8 +368,8 @@
                 style="margin-left: auto; margin-right: 0px;"
                 title="DESTRUCTIVELY reset work/rest durations.">↺</button>
       </div>
-      <!-- Row 4: the optional message butterbar. -->
-      <div id="butterbar" class="shown" style="grid-row: 4;">
+      <!-- Row 5: the optional message butterbar. -->
+      <div id="butterbar" class="shown" style="grid-row: 5;">
         Lost server connection, re-establishing...
       </div>
     </div>

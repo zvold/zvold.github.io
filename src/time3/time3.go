@@ -18,6 +18,7 @@ import (
 var portFlag = flag.Int("port", 37177, "Port to listen on.")
 
 //go:embed template.html
+//go:embed tomato.ico
 var f embed.FS
 
 // Maintains a map of all currently connected clients.
@@ -150,9 +151,7 @@ func (state *State) toJson() string {
 		state.mode.toString(),
 		state.work.Seconds(),
 		state.rest.Seconds(),
-		// TODO: consider _sending_ modeStart as "time ago" (i.e. now-modeStart)
-		//       so that clock difference b/w client and server won't matter.
-		state.modeStart.UnixMilli())
+		clock.Now().Sub(state.modeStart).Milliseconds()) // X milliseconds ago.
 }
 
 // Resets 'modeStart' to 'time.Now()', and updates the 'work' and 'rest' times.
@@ -270,97 +269,129 @@ func handleJsonRequest(jsonRequest *JsonRequest) {
 	}
 }
 
-// Starts an HTTP server which:
-//   - Responds with a full HTML page to HTTP GET requests. The page will
-//     represent the current State.
-//   - Accepts requests for mode changes via HTTP POST and responds with a JSON
-//     encoded current State.
-func main() {
-	flag.Parse()
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		key := getRemoteHost(r)
-		if remoteHosts.add(key) {
-			fmt.Printf("New remote host:\t%s\n", key)
-		}
+// Logs the remote peer if it's seen for the first time.
+func logNewPeer(r *http.Request) {
+	key := getRemoteHost(r)
+	if remoteHosts.add(key) {
+		fmt.Printf("New remote host:\t%s\n", key)
+	}
+}
 
-		if r.Method == "GET" {
-			// Request fetching the full HTML page for the current state.
-			tmpl, err := template.ParseFS(f, "template.html")
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			err = state.writeHtmlResponse(w, tmpl)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else if r.Method == "POST" {
-			// Request (potentially) modifying the state.
-			defer func() {
-				// Always return the current state, even on invalid requests.
-				fmt.Fprintf(w, state.toJson())
-			}()
+// Reads favicon from tomato.ico and writes its contents to the response.
+func faviconHandler(w http.ResponseWriter, r *http.Request) {
+	logNewPeer(r)
 
-			jsonRequest, err := parseRequestBody(r)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-			handleJsonRequest(jsonRequest)
-		} else {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	favicon, err := f.ReadFile("tomato.ico")
+	if err != nil {
+		fmt.Println(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{}
-		c, err := upgrader.Upgrade(w, r, nil)
+	w.Header().Set("Content-Type", "image/x-icon")
 
+	_, err = w.Write(favicon)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// On HTTP GET requests, responds with a full HTML/Javascript page representing the current State.
+// On HTTP POST requests, executes the requested command (like a mode change) and responds with a
+// JSON encoded updated State.
+func mainPageHandler(w http.ResponseWriter, r *http.Request) {
+	logNewPeer(r)
+
+	if r.Method == "GET" {
+		// Request fetching the full HTML page for the current state.
+		tmpl, err := template.ParseFS(f, "template.html")
 		if err != nil {
-			fmt.Printf("websocket upgrade failed, closing: %s\n", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		client := WsClient{conn: c}
-		clients.add(&client)
-
+		err = state.writeHtmlResponse(w, tmpl)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else if r.Method == "POST" {
+		// Request (potentially) modifying the state.
 		defer func() {
-			clients.remove(&client)
-			c.Close()
+			// Always return the current state, even on invalid requests.
+			fmt.Fprintf(w, state.toJson())
 		}()
 
-		fmt.Println("websocket connection established, looping...")
-		err = client.send(state.toJson())
-		if err == nil {
-			fmt.Printf("sent the current state: %s\n", state.String())
+		jsonRequest, err := parseRequestBody(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		handleJsonRequest(jsonRequest)
+	} else {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// Upgrades incoming connection to websocket, executes incoming commands (like a mode change), keeps
+// track of all connected websocket clients and broadcasts State changes when they happen.
+func websocketHandler(w http.ResponseWriter, r *http.Request) {
+	logNewPeer(r)
+
+	upgrader := websocket.Upgrader{}
+	c, err := upgrader.Upgrade(w, r, nil)
+
+	if err != nil {
+		fmt.Printf("websocket upgrade failed, closing: %s\n", err)
+		return
+	}
+
+	client := WsClient{conn: c}
+	clients.add(&client)
+
+	defer func() {
+		clients.remove(&client)
+		c.Close()
+	}()
+
+	fmt.Println("websocket connection established, looping...")
+	err = client.send(state.toJson())
+	if err == nil {
+		fmt.Printf("sent the current state: %s\n", state.String())
+	}
+
+	for {
+		mtype, message, err := c.ReadMessage()
+		if err != nil {
+			fmt.Printf("websocket read error, closing: %s\n", err)
+			break
 		}
 
-		for {
-			mtype, message, err := c.ReadMessage()
+		fmt.Printf("websocket message received (type %d): %s\n", mtype, message)
+		switch mtype {
+		case websocket.TextMessage:
+			var jsonRequest JsonRequest
+			err = json.Unmarshal(message, &jsonRequest)
 			if err != nil {
-				fmt.Printf("websocket read error, closing: %s\n", err)
+				fmt.Printf("Error while unmarshalling, ignoring: %s\n", err)
 				break
 			}
-
-			fmt.Printf("websocket message received (type %d): %s\n", mtype, message)
-			switch mtype {
-			case websocket.TextMessage:
-				var jsonRequest JsonRequest
-				err = json.Unmarshal(message, &jsonRequest)
-				if err != nil {
-					fmt.Printf("Error while unmarshalling, ignoring: %s\n", err)
-					break
-				}
-				handleJsonRequest(&jsonRequest)
-			case websocket.CloseMessage:
-				fmt.Printf("websocket close received, closing.\n")
-				return
-			default:
-				// no-op
-			}
+			handleJsonRequest(&jsonRequest)
+		case websocket.CloseMessage:
+			fmt.Printf("websocket close received, closing.\n")
+			return
+		default:
+			// no-op
 		}
-	})
+	}
+}
+
+// Starts an HTTP server which:
+func main() {
+	flag.Parse()
+
+	http.HandleFunc("/favicon.ico", faviconHandler)
+	http.HandleFunc("/", mainPageHandler)
+	http.HandleFunc("/ws", websocketHandler)
 
 	fmt.Printf("Server listening on port %d...\n", *portFlag)
 	http.ListenAndServe(fmt.Sprintf(":%d", *portFlag), nil)

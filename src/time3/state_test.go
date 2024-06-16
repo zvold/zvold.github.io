@@ -28,10 +28,11 @@ func Test_State_toJson(t *testing.T) {
 		work:      12_345 * time.Millisecond,
 		rest:      67_890 * time.Millisecond,
 		mode:      Off,
-		modeStart: time.UnixMilli(1_717_243_200_000),
+		modeStart: clock.Now(),
 	}
 
-	want := `{"mode": "off", "work": 12.35, "rest": 67.89, "modeStart": 1717243200000}`
+	mockClock.now = mockClock.now.Add(20_000 * time.Millisecond)
+	want := `{"mode": "off", "work": 12.35, "rest": 67.89, "modeStart": 20000}`
 	got := state.toJson()
 	if got != want {
 		t.Errorf("state.toJson(), want: %v, got: %v", want, got)
