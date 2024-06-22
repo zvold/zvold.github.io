@@ -1,9 +1,10 @@
 package main
 
 import (
-	"fmt"
-	"github.com/gorilla/websocket"
+	"log/slog"
 	"sync"
+
+	"github.com/gorilla/websocket"
 )
 
 // WsClient is a mutex-protected pointer to `websocket.Conn`.
@@ -30,14 +31,14 @@ func (m *WsClients) add(client *WsClient) {
 	m.Lock()
 	defer m.Unlock()
 	m.clients[client] = len(m.clients) + 1
-	fmt.Printf("client %d connected\n", m.clients[client])
+	slog.Debug("client connected.", "client", m.clients[client])
 }
 
 // Removes existing websocket client from the set (e.g. on disconnect).
 func (m *WsClients) remove(client *WsClient) {
 	m.Lock()
 	defer m.Unlock()
-	fmt.Printf("client %d disconnected\n", m.clients[client])
+	slog.Debug("client disconnected.", "client", m.clients[client])
 	delete(m.clients, client)
 }
 
@@ -46,10 +47,10 @@ func (m *WsClients) broadcast(msg string) {
 	m.Lock()
 	defer m.Unlock()
 	for c, v := range m.clients {
-		fmt.Printf("sending message to client %d\n", v)
+		slog.Debug("sending a message.", "client", v)
 		err := c.send(msg)
 		if err != nil {
-			fmt.Printf("send to client %d failed, ignoring: %s\n", v, err)
+			slog.Error("send failed, ignoring.", "client", v, "error", err)
 		}
 	}
 }

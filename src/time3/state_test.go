@@ -136,8 +136,8 @@ func Test_patchDuration_negative(t *testing.T) {
 		t.Errorf("patchDuration(), want: %+v, got: %+v", want, field)
 	}
 
-	// Minimum resulting value is capped at 1 second.
-	want = 1 * time.Second
+	// Minimum resulting value is capped at 0 second.
+	want = 0
 	patchDuration(&field, "-1h")
 	if field != want {
 		t.Errorf("patchDuration(), want: %+v, got: %+v", want, field)

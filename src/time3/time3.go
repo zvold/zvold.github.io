@@ -7,15 +7,25 @@ import (
 	"fmt"
 	"html/template"
 	"io/ioutil"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+
+	"context"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var portFlag = flag.Int("port", 37177, "Port to listen on.")
+var portFlag = flag.Int("port", 37177, "Port on which HTTP server will listen.")
+
+var httpsFlag = flag.Bool("https", false, "Set to 'true' to start HTTPs server on port+1."+
+	" This requires 'server.crt' and 'server.key' files to be present.")
+
+var verboseFlag = flag.Bool("v", false, "Set to 'true' for more verbose logging.")
 
 //go:embed template.html
 //go:embed tomato.ico
@@ -107,8 +117,8 @@ type State struct {
 
 // Initialize the punch clock. It starts in the 'off' mode.
 var state = State{
-	work:      time.Second,
-	rest:      time.Second,
+	work:      0,
+	rest:      0,
 	mode:      Off,
 	modeStart: clock.Now(),
 }
@@ -160,7 +170,7 @@ func (state *State) resetModeStart() {
 	var now = clock.Now()
 	var duration = now.Sub(state.modeStart)
 	if duration < 0 {
-		fmt.Println("Resetting backwards in time, ignoring.")
+		slog.Error("resetting backwards in time, ignoring.", "now", now, "modeStart", state.modeStart)
 		return
 	}
 
@@ -182,7 +192,7 @@ func (state *State) resetModeStart() {
 func (state *State) changeMode(modeString string) {
 	newMode := modeFromString(modeString)
 	if newMode == nil {
-		fmt.Printf("Unknown mode specified: %v, ignoring.\n", modeString)
+		slog.Info("unknown mode specified, ignoring.", "mode", modeString)
 		return
 	}
 	if state.mode == *newMode {
@@ -203,12 +213,12 @@ func patchDuration(field *time.Duration, str string) {
 	}
 	duration, err := time.ParseDuration(str)
 	if err != nil {
-		fmt.Printf("Cannot parse duration: %v, ignoring.\n", str)
+		slog.Info("invalid duration string, ignoring.", "duration", str)
 		return
 	}
 	*field += duration
-	if *field < time.Second {
-		*field = time.Second
+	if *field < 0 {
+		*field = 0
 	}
 }
 
@@ -273,7 +283,7 @@ func handleJsonRequest(jsonRequest *JsonRequest) {
 func logNewPeer(r *http.Request) {
 	key := getRemoteHost(r)
 	if remoteHosts.add(key) {
-		fmt.Printf("New remote host:\t%s\n", key)
+		slog.Info("new remote host connected.", "host", key)
 	}
 }
 
@@ -283,7 +293,7 @@ func faviconHandler(w http.ResponseWriter, r *http.Request) {
 
 	favicon, err := f.ReadFile("tomato.ico")
 	if err != nil {
-		fmt.Println(err)
+		slog.Error("error reading the icon file.", "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -326,6 +336,7 @@ func mainPageHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		slog.Info("HTTP POST message received.", "request", jsonRequest)
 		handleJsonRequest(jsonRequest)
 	} else {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -341,7 +352,7 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	c, err := upgrader.Upgrade(w, r, nil)
 
 	if err != nil {
-		fmt.Printf("websocket upgrade failed, closing: %s\n", err)
+		slog.Error("websocket upgrade failed, closing.", "error", err)
 		return
 	}
 
@@ -353,31 +364,31 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		c.Close()
 	}()
 
-	fmt.Println("websocket connection established, looping...")
+	slog.Debug("websocket connection established, looping...")
 	err = client.send(state.toJson())
 	if err == nil {
-		fmt.Printf("sent the current state: %s\n", state.String())
+		slog.Debug("sent the current state.", "state", &state)
 	}
 
 	for {
 		mtype, message, err := c.ReadMessage()
 		if err != nil {
-			fmt.Printf("websocket read error, closing: %s\n", err)
+			slog.Debug("websocket read error, closing.", "error", err)
 			break
 		}
 
-		fmt.Printf("websocket message received (type %d): %s\n", mtype, message)
+		slog.Info("websocket message received.", "type", mtype, "message", message)
 		switch mtype {
 		case websocket.TextMessage:
 			var jsonRequest JsonRequest
 			err = json.Unmarshal(message, &jsonRequest)
 			if err != nil {
-				fmt.Printf("Error while unmarshalling, ignoring: %s\n", err)
+				slog.Info("error while unmarshalling, ignoring.", "error", err)
 				break
 			}
 			handleJsonRequest(&jsonRequest)
 		case websocket.CloseMessage:
-			fmt.Printf("websocket close received, closing.\n")
+			slog.Debug("websocket close received, closing.")
 			return
 		default:
 			// no-op
@@ -385,14 +396,53 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Starts an HTTP server which:
 func main() {
 	flag.Parse()
 
-	http.HandleFunc("/favicon.ico", faviconHandler)
+	if *verboseFlag {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
+
 	http.HandleFunc("/", mainPageHandler)
 	http.HandleFunc("/ws", websocketHandler)
+	http.HandleFunc("/favicon.ico", faviconHandler)
 
-	fmt.Printf("Server listening on port %d...\n", *portFlag)
-	http.ListenAndServe(fmt.Sprintf(":%d", *portFlag), nil)
+	var wg sync.WaitGroup
+
+	// Start HTTP server on 'port'.
+	srv1 := http.Server{Addr: fmt.Sprintf(":%d", *portFlag)}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		slog.Info("HTTP  server started.", "address", srv1.Addr)
+		slog.Info("HTTP  server stopped.", "result", srv1.ListenAndServe())
+	}()
+
+	// Start an HTTPS server on 'port+1'.
+	srv2 := http.Server{Addr: fmt.Sprintf(":%d", *portFlag+1)}
+	if *httpsFlag {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slog.Info("HTTPs server started.", "address", srv2.Addr)
+			slog.Info("HTTPs server stopped.", "result", srv2.ListenAndServeTLS("server.crt", "server.key"))
+		}()
+	}
+
+	// Request both HTTP and HTTPS servers to shutdown when SIGINT is received.
+	go func() {
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		<-sigint
+
+		if err := srv1.Shutdown(context.Background()); err != nil {
+			slog.Error("HTTP  server shutdown error.", "error", err)
+		}
+		if err := srv2.Shutdown(context.Background()); err != nil {
+			slog.Error("HTTPs server shutdown error.", "error", err)
+		}
+	}()
+
+	// Block until both servers terminate.
+	wg.Wait()
 }

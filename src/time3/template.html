@@ -107,7 +107,8 @@
           return;
         }
         const url = new URL(window.location.origin);
-        ws = new WebSocket(`ws://${url.hostname}:${url.port}/ws`);
+        const protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${protocol}//${url.hostname}:${url.port}/ws`);
         ws.onopen = function(evt) {
           console.log("websocket onopen()");
           if (reconnectTimer != null) {
@@ -134,7 +135,8 @@
 
       // Convenience function for calculating the position of the progress bar.
       function ratio(duration) {
-        return duration.totalWork / (duration.totalWork + duration.totalRest);
+        const totalTime = duration.totalWork + duration.totalRest;
+        return totalTime == 0 ? 0.5 : duration.totalWork / totalTime;
       }
 
       // Render ready-to-use div element representing the current state.
@@ -144,7 +146,8 @@
         const str = template
             .replaceAll("%SPLIT_POS%", 400.0 * r)
             .replaceAll("%REST_WIDTH%", 400.0 * (1.0 - r))
-            .replaceAll("%TARGET_X%", 400.0 * target / 100.0);
+            .replaceAll("%TARGET_X%", 400.0 * target / 100.0)
+            .replaceAll("%RATIO%", `${(r*100).toFixed(1)}%`);
         return new DOMParser()
             .parseFromString(str, "text/html").body.firstChild;
       }
@@ -313,7 +316,7 @@
 
       // Template for drawing the "progress bar" SVG div.
       const template = `
-      <div id="svg-container" style="grid-row: 2;">
+      <div id="svg-container" style="grid-row: 2;" title="%RATIO%">
         <svg width="401" height="40" stroke-width="2" stroke="black">
           <rect x="0" y="10" width="%SPLIT_POS%" height="20" fill="#0072d4"/>
           <rect x="%SPLIT_POS%" y="10" width="%REST_WIDTH%" height="20" fill="#489100"/>
