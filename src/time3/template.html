@@ -303,16 +303,19 @@
 
       // Effectively "resets" work/rest time on the server by subtracting 100h.
       function reset() {
+        setCurrentDate();
         sendMessage('{"work": "-100h", "rest": "-100h"}');
       }
 
-      // Formats current date as "YYYY-MM-DD"...
-      function formatCurrentDate() {
+      // Formats current date as "YYYY-MM-DD" and updates the GUI.
+      function setCurrentDate() {
         const date = new Date();
         const year = date.getFullYear();
         const month = (date.getMonth() + 1).toString().padStart(2, "0");
         const day = date.getDate().toString().padStart(2, "0");
-        return `${year}-${month}-${day}`;
+        const dateStr = `${year}-${month}-${day}`;
+
+        document.getElementById("text-date").innerText = dateStr;
       }
 
       // Template for drawing the "progress bar" SVG div.
@@ -328,7 +331,7 @@
       `;
 
       window.onload = function() {
-        document.getElementById("text-date").innerText = `${formatCurrentDate()}`;
+        setCurrentDate();
         createWebSocketConnection();
         redrawView();
         setOrClearTimer();
