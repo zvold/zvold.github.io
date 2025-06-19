@@ -1,17 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"html/template"
-	"io/ioutil"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"sync"
 
 	"context"
@@ -26,6 +29,8 @@ var httpsFlag = flag.Bool("https", false, "Set to 'true' to start HTTPs server o
 	" This requires 'server.crt' and 'server.key' files to be present.")
 
 var verboseFlag = flag.Bool("v", false, "Set to 'true' for more verbose logging.")
+
+var dbFlag = flag.String("db", "", "Database file to use. Database is not enabled when not set.")
 
 //go:embed template.html
 //go:embed tomato.ico
@@ -50,25 +55,67 @@ func (c *NormalClock) Now() time.Time {
 
 var clock Clock = &NormalClock{}
 
-// The set of remote hosts (IP + user agent) seen during the operation.
+// Host Info stores info about the remote host that connected to our server.
+type HostInfo struct {
+	ip        string
+	userAgent string
+}
+
+func (h *HostInfo) String() string {
+	return fmt.Sprintf("%s|%s", h.ip, h.userAgent)
+}
+
+// The set of remote hosts seen during the operation, and how many times each connected.
 type RemoteHosts struct {
 	sync.Mutex
-	set map[string]bool
+	set map[HostInfo]uint64
 }
 
 // Adds the key to 'hosts' set and returns 'true' if it was a new key.
-func (hosts *RemoteHosts) add(key string) bool {
+func (hosts *RemoteHosts) add(key HostInfo) bool {
 	hosts.Lock()
 	defer hosts.Unlock()
 	if _, ok := hosts.set[key]; ok {
+		hosts.set[key]++
 		return false
 	}
-	hosts.set[key] = true
+	hosts.set[key] = 1
 	return true
 }
 
+// Formats hosts summary as a table and returns it in a string.
+func (hosts *RemoteHosts) asTable() (info string) {
+	hosts.Lock()
+	defer hosts.Unlock()
+
+	// Print all remote hosts in decreasing order of number of occurrences.
+	keys := slices.SortedFunc(
+		maps.Keys(hosts.set),
+		func(a, b HostInfo) int {
+			v := int(hosts.set[b]) - int(hosts.set[a])
+			if v != 0 {
+				return v
+			}
+			return strings.Compare(b.userAgent, a.userAgent)
+		},
+	)
+
+	info += fmt.Sprintf("| %16s | %130s | %5s |\n", "ip", "User Agent", "Count")
+	info += fmt.Sprintf("| %s | %s | %s |\n",
+		strings.Repeat("-", 16), strings.Repeat("-", 130), strings.Repeat("-", 5))
+	for _, k := range keys {
+		info += fmt.Sprintf("| %16s | %130s | %5d |\n", k.ip, k.userAgent, hosts.set[k])
+	}
+	return
+}
+
+// Pretty-prints the remote hosts summary to the log.
+func (hosts *RemoteHosts) log() {
+	slog.Info(fmt.Sprintf("remote hosts seen so far: \n%s", hosts.asTable()))
+}
+
 var remoteHosts = RemoteHosts{
-	set: make(map[string]bool),
+	set: make(map[HostInfo]uint64),
 }
 
 // ModeType is an enum representing the possible "modes": work, rest and off.
@@ -232,14 +279,50 @@ func (state *State) patchDurations(workString string, restString string) {
 	patchDuration(&state.rest, restString)
 }
 
-// Constructs a human-readable string representing the remote host.
-func getRemoteHost(r *http.Request) (key string) {
-	key = r.RemoteAddr
-	host, _, err := net.SplitHostPort(key)
-	if err == nil {
-		key = host
+// Returns the total work/rest durations.
+func (state *State) getTotalDurations(cutoff time.Time) (work, rest time.Duration) {
+	state.Lock()
+	defer state.Unlock()
+
+	work, rest = state.work, state.rest
+
+	var duration = cutoff.Sub(state.modeStart)
+	if duration < 0 {
+		slog.Error("time goes backwards, ignoring.", "cutoff", cutoff, "modeStart", state.modeStart)
+		return
 	}
-	return fmt.Sprintf("%s | %s | %s", key, r.Header.Get("X-Forwarded-For"), r.UserAgent())
+
+	switch state.mode {
+	case Work:
+		work += duration
+	case Rest:
+		rest += duration
+	case Off:
+		// No-op
+	default:
+		panic(fmt.Sprintf("Unhandled mode: %v.", state.mode))
+	}
+	return
+}
+
+// Constructs a human-readable string representing the remote host.
+func getRemoteHost(r *http.Request) HostInfo {
+	addr := r.RemoteAddr
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil {
+		addr = host
+	}
+	return HostInfo{
+		ip:        truncate(addr, 16),
+		userAgent: truncate(r.UserAgent(), 130),
+	}
+}
+
+func truncate(s string, l int) string {
+	if len(s) <= l {
+		return s
+	}
+	return s[:l-3] + "..."
 }
 
 // JsonRequest struct represents the body of an HTTP POST request.
@@ -251,14 +334,14 @@ type JsonRequest struct {
 
 // Returns JsonRequest for the HTTP request body, or nil in case of errors.
 func parseRequestBody(r *http.Request) (*JsonRequest, error) {
-	bodyBytes, err := ioutil.ReadAll(r.Body)
 	defer r.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("Error reading request body: %v", err)
-	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
 
 	var result JsonRequest
-	err = json.Unmarshal(bodyBytes, &result)
+	err := decoder.Decode(&result)
+
 	if err != nil {
 		return nil, fmt.Errorf("Error while unmarshalling: %v", err)
 	}
@@ -274,6 +357,7 @@ func handleJsonRequest(jsonRequest *JsonRequest) {
 		clients.broadcast(state.toJson())
 	} else if jsonRequest.Mode != "" {
 		// This is a request attempting to update the mode.
+		// TODO(zvold): consider updating the daily total on mode changing to 'off'.
 		state.changeMode(jsonRequest.Mode)
 		clients.broadcast(state.toJson())
 	}
@@ -281,9 +365,9 @@ func handleJsonRequest(jsonRequest *JsonRequest) {
 
 // Logs the remote peer if it's seen for the first time.
 func logNewPeer(r *http.Request) {
-	key := getRemoteHost(r)
-	if remoteHosts.add(key) {
-		slog.Info("new remote host connected.", "host", key)
+	hostInfo := getRemoteHost(r)
+	if remoteHosts.add(hostInfo) {
+		slog.Info("new remote host.", "host", &hostInfo)
 	}
 }
 
@@ -328,7 +412,7 @@ func mainPageHandler(w http.ResponseWriter, r *http.Request) {
 		// Request (potentially) modifying the state.
 		defer func() {
 			// Always return the current state, even on invalid requests.
-			fmt.Fprintf(w, state.toJson())
+			fmt.Fprintf(w, "%s", state.toJson())
 		}()
 
 		jsonRequest, err := parseRequestBody(r)
@@ -380,8 +464,11 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		slog.Info("websocket message received.", "type", mtype, "message", message)
 		switch mtype {
 		case websocket.TextMessage:
+			decoder := json.NewDecoder(bytes.NewReader(message))
+			decoder.DisallowUnknownFields()
+
 			var jsonRequest JsonRequest
-			err = json.Unmarshal(message, &jsonRequest)
+			err := decoder.Decode(&jsonRequest)
 			if err != nil {
 				slog.Info("error while unmarshalling, ignoring.", "error", err)
 				break
@@ -403,9 +490,33 @@ func main() {
 		slog.SetLogLoggerLevel(slog.LevelDebug)
 	}
 
+	var db *Database
+	if *dbFlag != "" {
+		var dbErr error
+		db, dbErr = InitDB(*dbFlag)
+		if dbErr != nil {
+			slog.Error("cannot open database.", "err", dbErr)
+			os.Exit(1)
+		}
+
+		totalDays := db.DaysCount()
+		slog.Info("Logged days:", "count", totalDays)
+
+		db.StartLogger(&state)
+	}
+
 	http.HandleFunc("/", mainPageHandler)
 	http.HandleFunc("/ws", websocketHandler)
 	http.HandleFunc("/favicon.ico", faviconHandler)
+	http.HandleFunc("/graph", graphPageHandler(db))
+
+	// Log cumulative remote hosts stats every hour.
+	hostsLogger := time.NewTicker(1 * time.Hour)
+	go func() {
+		for range hostsLogger.C {
+			remoteHosts.log()
+		}
+	}()
 
 	var wg sync.WaitGroup
 
@@ -434,6 +545,15 @@ func main() {
 		sigint := make(chan os.Signal, 1)
 		signal.Notify(sigint, os.Interrupt)
 		<-sigint
+
+		// Block until daily logger gorouting is stopped.
+		if db != nil {
+			db.StopLogger()
+		}
+
+		hostsLogger.Stop()
+		slog.Info("Final remote hosts stats on shutdown:")
+		remoteHosts.log()
 
 		if err := srv1.Shutdown(context.Background()); err != nil {
 			slog.Error("HTTP  server shutdown error.", "error", err)

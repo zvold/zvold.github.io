@@ -30,12 +30,23 @@
         width: fit-content;
         position: absolute;
         left: 0px; top: 0px;
-        padding: 10px;
+        padding: 5px;
+      }
+
+      .grouper {
+        width: 401px;
+        padding: 1px;
+        position: relative;
+        left: -1px;
       }
 
       #svg-container {
         width: 401px;
         height: 40px;
+      }
+
+      #graph-container {
+        width: 401px;
       }
 
       .text-container {
@@ -316,6 +327,8 @@
         const dateStr = `${year}-${month}-${day}`;
 
         document.getElementById("text-date").innerText = dateStr;
+        // TODO(zvold): use closest next Friday as the right boundary?
+        document.getElementById("graph-image").src = `graph?date=${dateStr}&n=13&w=401&h=300`;
       }
 
       // Template for drawing the "progress bar" SVG div.
@@ -340,6 +353,8 @@
   </head>
   <body>
     <div class="root-container" style="width: 401px;">
+      <!-- Extra div to group some UI elements together. -->
+      <div class="grouper">
       <!-- Row 1: the title and current date. -->
       <div class="text-container" style="grid-row: 1;">
         <img src="favicon.ico" width="32" height="32"
@@ -375,10 +390,18 @@
                 style="margin-left: auto; margin-right: 0px;"
                 title="DESTRUCTIVELY reset work/rest durations.">↺</button>
       </div>
+      </div>
+      <!-- Extra div to group some UI elements together. -->
+      <div class="grouper">
       <!-- Row 5: the optional message butterbar. -->
       <div id="butterbar" class="shown" style="grid-row: 5;">
         Lost server connection, re-establishing...
       </div>
+      <!-- Row 6: the graph showing the daily totals. -->
+      <div id="graph-container" style="grid-row: 6;">
+         <img id="graph-image" src="graph"/>
+      </div>
+      <div>
     </div>
   </body>
 </html>
