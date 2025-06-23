@@ -16,5 +16,7 @@ go run github.com/zvold/zvold.github.io/src/time3@v0.5.0 [-port=<port>] [-https]
 
 This was inspired by the article [Third Time: a better way to work](https://www.lesswrong.com/posts/RWu8eZqbwgB9zaerh/third-time-a-better-way-to-work) and the related [HN discussion](https://news.ycombinator.com/item?id=40378993).
 
-The app doesn't follow the "third time" technique strictly (nor was it the goal): no alarms, no meal breaks / big breaks with specific end time, etc. Rather, it allows to roughly target a certain work/rest ration (default is 75%, configurable via URL parameter  `?t=`).
+The app doesn't follow the "third time" technique strictly (nor was it the goal): no alarms, no meal breaks / big breaks with specific end time, etc. Rather, it allows to roughly target a certain work/rest ration (default is 75%, configurable via URL parameter `?t=`).
+
+Update: [Punch Clock 3000: Now With History](../2025-06-23/punch-clock-3000-now-with-history.md).
 
