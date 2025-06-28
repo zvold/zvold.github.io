@@ -97,15 +97,17 @@ func graphPageHandler(db *Database) func(a http.ResponseWriter, b *http.Request)
 		}
 		slog.Info("querying the database.", "opts", opts)
 
+		w.Header().Set("Content-Type", "image/png")
 		png, err2 := plotGraph(db, opts, string(scriptTemplate))
 		if err2 != nil {
-			http.Error(w, err2.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "image/png")
-		if _, err3 := w.Write(png); err3 != nil {
-			http.Error(w, err3.Error(), http.StatusInternalServerError)
+			// No gnuplot available - just respond with the dummy (empty) graph image.
+			if _, err := w.Write(dummyImage); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+		} else {
+			if _, err := w.Write(png); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 		}
 	}
 }

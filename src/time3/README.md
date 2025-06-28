@@ -8,12 +8,14 @@ A simple time tracker, in the spirit of time management approaches like:
 1. Start the server (see below for flags).
 
    ```
-   go run github.com/zvold/zvold.github.io/src/time3@v0.7.0 --db=time3.db
+   go run github.com/zvold/zvold.github.io/src/time3@v0.8.0 --db=time3.db
    ```
 
 2. Start the client(s).
 
     Open `http://hostname:37177` in the browser. Use the optional URL parameter `?t=` to set the "target" work/rest ratio.
+
+    If your server has `gnuplot` installed, the client should show a graph with historical values from the database.
 
 3. Toggle the mode (`work` / `rest` / `off the clock`) appropriately.
 
@@ -30,4 +32,3 @@ A simple time tracker, in the spirit of time management approaches like:
 - `-db=<path>` : Set sqlite database file name for recording the daily work/rest totals. The file will be created if it doesn't exist.
 
 - `-v` : Enable more verbose server logs.
-
