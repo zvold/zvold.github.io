@@ -318,17 +318,26 @@
         sendMessage('{"work": "-100h", "rest": "-100h"}');
       }
 
-      // Formats current date as "YYYY-MM-DD" and updates the GUI.
-      function setCurrentDate() {
-        const date = new Date();
-        const year = date.getFullYear();
-        const month = (date.getMonth() + 1).toString().padStart(2, "0");
-        const day = date.getDate().toString().padStart(2, "0");
-        const dateStr = `${year}-${month}-${day}`;
+      // Formats the date 'd' as 'yyyy-mm-dd'.
+      function formatDate(d) {
+        const year = d.getFullYear();
+        const month = (d.getMonth() + 1).toString().padStart(2, "0");
+        const day = d.getDate().toString().padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      }
 
-        document.getElementById("text-date").innerText = dateStr;
-        // TODO(zvold): use closest next Friday as the right boundary?
-        document.getElementById("graph-image").src = `graph?date=${dateStr}&n=13&w=401&h=300`;
+      // Update the current date and the historical graph in the GUI.
+      function setCurrentDate() {
+        const now = new Date();
+        document.getElementById("text-date").innerText = formatDate(now);
+
+        // Show the values for ~2 weeks, ending on the next Friday.
+        const friday = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() + (12 - now.getDay()) % 7);
+        document.getElementById("graph-image").src =
+          `graph?date=${formatDate(friday)}&n=12&w=401&h=300`;
       }
 
       // Template for drawing the "progress bar" SVG div.
@@ -399,7 +408,8 @@
       </div>
       <!-- Row 6: the graph showing the daily totals. -->
       <div id="graph-container" style="grid-row: 6;">
-         <img id="graph-image" src="graph"/>
+         <img id="graph-image" src="graph"
+              title="Work/rest data for ~2 weeks, ending on the next Friday."/>
       </div>
       <div>
     </div>
