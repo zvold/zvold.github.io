@@ -11,7 +11,8 @@ permalink: /
 2024-04-05 [Using etcd-io/raft Library](https://zvold.github.io/using-etcd-io-raft/) \
 2023-12-28 [Advent Of Code 2023](https://github.com/zvold/aoc?tab=readme-ov-file#2023) \
 2023-08-27 [Clipping Quickdraws](2023-08-27/clipping-quickdraws.md) \
-2022-01-11 [Bayes Theorem](2022-01-11/bayes-theorem.md)
+2022-01-11 [Bayes Theorem](2022-01-11/bayes-theorem.md) \
+2020-02-03 [Hanoi Tower](2020-02-03/hanoi-tower.md)
 
 ---
 
