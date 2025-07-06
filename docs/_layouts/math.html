@@ -1,29 +1,36 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en-US" }}">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<head>
-  {% include head-custom.html %}
+    <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
+    {% include head-custom.html %}
 
-  <script type="text/javascript">
-    window.MathJax = {
-      tex: {
-        packages: ['base', 'ams']
-      },
-      loader: {
-        load: ['ui/menu', '[tex]/ams']
-      }
-    };
-  </script>
+    <script type="text/javascript">
+      window.MathJax = {
+        tex: { packages: ['base', 'ams'] },
+        loader: { load: ['ui/menu', '[tex]/ams'] }
+      };
+    </script>
 
-  <script type="text/javascript" async
-          src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
-  </script>
-</head>
+    <script type="text/javascript" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+    </script>
+  </head>
+  <body>
+    <div class="container-lg px-3 my-5 markdown-body">
+      {% if site.title and site.title != page.title %}
+      <h1><a href="{{ "/" | absolute_url }}">{{ site.title }}</a></h1>
+      {% endif %}
 
-<body>
-  <div>
-    {{content}}
-  </div>
-</body>
+      {{ content }}
 
+      {% if site.github.private != true and site.github.license %}
+      <div class="footer border-top border-gray-light mt-5 pt-3 text-right text-gray">
+        This site is open source. {% github_edit_link "Improve this page" %}.
+      </div>
+      {% endif %}
+    </div>
+  </body>
 </html>
