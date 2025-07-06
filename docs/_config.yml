@@ -8,4 +8,4 @@ plugins:
   - jekyll-sitemap
   - jekyll-octicons
 
-markdown: GFM
+markdown: kramdown
