@@ -1,3 +1,22 @@
+:root {
+    --light-border-color: #dee2e6;
+    --code-color: #008080;
+    --main-color: #008cba;
+}
+
 pre, code {
     font-family: monospace;
+}
+
+table {
+    border-collapse: collapse;
+    text-align: center;
+}
+
+th, td {
+    border: 1px solid var(--light-border-color);
+}
+
+.octicon {
+    vertical-align: bottom;
 }
